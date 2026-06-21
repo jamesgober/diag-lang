@@ -75,6 +75,37 @@ proptest! {
         prop_assert_eq!(renderer.render(&diag, &map), renderer.render(&diag, &map));
     }
 
+    /// A diagnostic with arbitrary secondary labels, notes, and help — over
+    /// several files — still renders totally and deterministically, whatever spans
+    /// and how many labels it carries.
+    #[test]
+    fn render_with_many_labels_is_total_and_deterministic(
+        texts in prop::collection::vec("(?s).{0,30}", 1..4),
+        spans in prop::collection::vec((any::<u32>(), any::<u32>()), 1..6),
+    ) {
+        let mut map = SourceMap::new();
+        let mut total = 0u32;
+        for (i, text) in texts.iter().enumerate() {
+            map.add(alloc_name(i), text.as_str()).unwrap();
+            total += text.len() as u32;
+        }
+        let margin = total + 8;
+
+        let mut iter = spans.iter().map(|&(a, b)| Span::new(a % margin, b % margin));
+        let primary = Label::new(iter.next().unwrap(), "primary");
+        let mut diag = Diagnostic::new(Severity::Error, "msg", primary);
+        for span in iter {
+            diag = diag.with_secondary(Label::new(span, "secondary"));
+        }
+        diag = diag.with_note("a note").with_help("a hint");
+
+        let renderer = Renderer::new();
+        let out = renderer.render(&diag, &map);
+        prop_assert!(out.ends_with('\n'));
+        prop_assert!(out.starts_with("error: msg\n"));
+        prop_assert_eq!(&out, &renderer.render(&diag, &map));
+    }
+
     /// On a single line, the number of carets equals the visual width of the
     /// spanned text — one caret per column, tabs expanded, multi-byte characters
     /// counted once — and never fewer than one.
@@ -99,6 +130,15 @@ proptest! {
         let carets = out.matches('^').count();
         prop_assert_eq!(carets, naive_caret_width(&line, start, end));
     }
+}
+
+/// A distinct source name for index `i`, so the map's files are easy to tell
+/// apart in a failing case.
+fn alloc_name(i: usize) -> String {
+    let mut s = String::from("f");
+    s.push_str(&i.to_string());
+    s.push_str(".rs");
+    s
 }
 
 /// Joins three fragments into one line without pulling in `std`'s `format!`

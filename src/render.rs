@@ -1,12 +1,13 @@
 //! Turning a [`Diagnostic`] into caret-annotated text.
 
 use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt;
 
-use source_lang::SourceMap;
-use span_lang::Span;
+use source_lang::{SourceId, SourceMap};
+use span_lang::BytePos;
 
-use crate::Diagnostic;
+use crate::{Diagnostic, Label};
 
 /// The number of columns a tab advances to. A tab moves the cursor to the next
 /// multiple of this width, the convention source viewers use, so the caret line
@@ -16,17 +17,28 @@ const TAB_WIDTH: usize = 4;
 /// Renders a [`Diagnostic`] against a [`SourceMap`] into aligned, caret-annotated
 /// text in the style of a modern toolchain.
 ///
-/// The renderer reads the span a diagnostic points at, finds the source and line
-/// it falls on through the map, and prints that line with a caret underline placed
-/// exactly under the offending characters. Alignment is computed in display
-/// columns — a multi-byte UTF-8 character counts as one column, and a tab expands
-/// to the next four-column tab stop — so the carets line up under the source
-/// whatever it contains.
+/// The renderer reads the spans a diagnostic points at, finds the sources and
+/// lines they fall on through the map, and prints those lines with underlines
+/// placed exactly under the offending characters — `^` for the primary label,
+/// `-` for secondary labels. Alignment is computed in display columns: a
+/// multi-byte UTF-8 character counts as one column, and a tab expands to the next
+/// four-column tab stop, so the underlines line up under the source whatever it
+/// contains.
 ///
-/// Output is deterministic: the same diagnostic and map always render
-/// byte-identical text. Producing it is allocation-light and never panics; a span
-/// that falls outside the loaded sources renders a defined note rather than
-/// failing (see [`render`](Renderer::render)).
+/// # Layout
+///
+/// Output begins with the `severity: message` header. Then, for each source file
+/// any label points into — the file holding the primary label first, the rest in
+/// the order they were added to the map — a frame is drawn: a `--> file:line:col`
+/// location line and the labelled lines of that file, each shown once with every
+/// label's underline stacked beneath it. A span covering several lines underlines
+/// each line it touches, with the message on the last. Trailing `note:` and
+/// `help:` lines, if any, close the output.
+///
+/// A label whose span falls outside the loaded sources is not dropped and does not
+/// panic: it renders as a `note:` line reporting the offending span. Output is
+/// deterministic — the same diagnostic and map always render byte-identical text —
+/// and always ends with a newline.
 ///
 /// # Examples
 ///
@@ -82,11 +94,10 @@ impl Renderer {
     /// allocates a fresh string, writes the diagnostic into it, and returns it.
     /// The output always ends with a newline.
     ///
-    /// If the diagnostic's span cannot be located in `map` — it is past the end of
-    /// the loaded sources, or references an offset no source covers — the renderer
-    /// does not panic. It prints the header followed by a note that the span is
-    /// outside the sources, so a stale or hostile span degrades to a readable
-    /// message instead of a crash.
+    /// A label whose span cannot be located in `map` — past the end of the loaded
+    /// sources, or at an offset no source covers — does not panic; it renders as a
+    /// `note:` line reporting the span, so a stale or hostile span degrades to a
+    /// readable message instead of a crash.
     ///
     /// # Examples
     ///
@@ -112,8 +123,7 @@ impl Renderer {
     pub fn render(&self, diag: &Diagnostic, map: &SourceMap) -> String {
         let mut out = String::new();
         // Writing into a `String` is infallible, so the `fmt::Result` cannot be an
-        // error here; the panic path is unreachable in practice and `render_to`
-        // exposes the fallible form for sinks that can fail.
+        // error here; `render_to` exposes the fallible form for sinks that can fail.
         let _ = self.render_to(&mut out, diag, map);
         out
     }
@@ -157,111 +167,227 @@ impl Renderer {
     ) -> fmt::Result {
         writeln!(out, "{}: {}", diag.severity().as_str(), diag.message())?;
 
-        match Frame::resolve(map, diag.primary().span()) {
-            Some(frame) => frame.write(out, diag.primary().message()),
-            None => writeln!(
+        // Split every label into the source it resolves against, keeping any that
+        // resolve nowhere for a trailing note. The primary leads, so its file
+        // frames first and its position anchors the frame.
+        let mut located: Vec<(SourceId, bool, &Label)> = Vec::new();
+        let mut unlocated: Vec<&Label> = Vec::new();
+        for (is_primary, label) in labels(diag) {
+            match map.locate(label.span().start()) {
+                Some((id, _)) => located.push((id, is_primary, label)),
+                None => unlocated.push(label),
+            }
+        }
+
+        for id in frame_order(&located) {
+            write_frame(out, map, id, &located)?;
+        }
+
+        for label in &unlocated {
+            writeln!(
                 out,
                 " = note: span {} is outside the loaded sources",
-                diag.primary().span()
-            ),
+                label.span()
+            )?;
         }
+        for note in diag.notes() {
+            writeln!(out, " = note: {note}")?;
+        }
+        for help in diag.help() {
+            writeln!(out, " = help: {help}")?;
+        }
+
+        Ok(())
     }
 }
 
-/// Everything needed to draw one single-line caret frame, resolved from the map.
-struct Frame<'a> {
-    /// The source's display name.
-    name: &'a str,
-    /// 1-based line number of the span's start.
-    line_no: u32,
-    /// 1-based character column of the span's start, for the `file:line:col`
-    /// header. Counted in characters, as editors report it.
-    col: u32,
-    /// The offending line's text, terminator excluded.
-    line_text: &'a str,
-    /// Byte offset within `line_text` where the caret run begins, floored to a
-    /// character boundary.
-    start_byte: usize,
-    /// Byte offset within `line_text` where the caret run ends, floored to a
-    /// character boundary and never before `start_byte`.
-    end_byte: usize,
+/// The primary label paired with `true`, then every secondary paired with
+/// `false`, in the order they were added.
+fn labels(diag: &Diagnostic) -> impl Iterator<Item = (bool, &Label)> {
+    core::iter::once((true, diag.primary())).chain(diag.secondary().iter().map(|l| (false, l)))
 }
 
-impl<'a> Frame<'a> {
-    /// Resolves a global span to a single-line frame, or `None` if no source
-    /// covers the span's start.
-    fn resolve(map: &'a SourceMap, span: Span) -> Option<Self> {
-        let (id, local_start) = map.locate(span.start())?;
-        let file = map.source(id)?;
-        let text = file.text();
+/// The source ids to draw a frame for, the primary's file first and the rest in
+/// map order, each once.
+fn frame_order(located: &[(SourceId, bool, &Label)]) -> Vec<SourceId> {
+    let primary_file = located.iter().find(|(_, p, _)| *p).map(|(id, _, _)| *id);
 
-        let index = file.line_index();
-        let lc = index.line_col(local_start);
-        let line_span = index.line_span(lc.line)?;
+    let mut ids: Vec<SourceId> = located.iter().map(|(id, _, _)| *id).collect();
+    ids.sort_unstable_by_key(|id| id.to_u32());
+    ids.dedup();
 
-        let line_lo = line_span.start().to_usize();
-        let line_hi = line_span.end().to_usize();
-        let line_text = text.get(line_lo..line_hi)?;
+    if let Some(pf) = primary_file {
+        ids.retain(|id| *id != pf);
+        ids.insert(0, pf);
+    }
+    ids
+}
 
-        // The span's end in this source's local coordinates. The global end minus
-        // the file's global base; saturating because a span may reach past the
-        // file, in which case the carets stop at the line's end.
-        let local_end = (span
-            .end()
-            .to_u32()
-            .saturating_sub(file.span().start().to_u32())) as usize;
+/// One label's underline on one line: where the carets sit and what they say.
+struct Mark<'a> {
+    line: u32,
+    lead: usize,
+    width: usize,
+    marker: char,
+    /// The message, present only on the label's last covered line.
+    message: Option<&'a str>,
+    /// Primary labels sort ahead of secondary ones when stacked on a line.
+    primary: bool,
+}
 
-        // Offsets relative to the line, clamped into it. A multi-line span is
-        // clamped to this first line — full multi-line frames arrive in v0.3.0.
-        let start_byte = floor_boundary(line_text, local_start.to_usize().saturating_sub(line_lo));
-        let end_byte = floor_boundary(line_text, local_end.saturating_sub(line_lo)).max(start_byte);
+/// Renders the frame for the source named by `id`: its location line and every
+/// line any of its labels touches, with the underlines stacked beneath each.
+fn write_frame(
+    out: &mut impl fmt::Write,
+    map: &SourceMap,
+    id: SourceId,
+    located: &[(SourceId, bool, &Label)],
+) -> fmt::Result {
+    let Some(file) = map.source(id) else {
+        return Ok(());
+    };
+    let text = file.text();
+    let base = file.span().start().to_u32();
+    let index = file.line_index();
 
-        Some(Self {
-            name: file.name(),
-            line_no: lc.line,
-            col: lc.col,
-            line_text,
-            start_byte,
-            end_byte,
-        })
+    // Resolve this file's labels into per-line marks, and remember the anchor —
+    // the primary if it is here, else the earliest label — for the location line.
+    let mut marks: Vec<Mark<'_>> = Vec::new();
+    let mut anchor: Option<(u32, u32)> = None;
+    let mut anchor_is_primary = false;
+    for &(label_id, is_primary, label) in located {
+        if label_id != id {
+            continue;
+        }
+        let local_start = label.span().start().to_u32().saturating_sub(base);
+        let local_end = (label.span().end().to_u32().saturating_sub(base) as usize).min(text.len());
+        let lc = index.line_col(BytePos::new(local_start));
+
+        // The anchor is the primary label, or failing that the earliest one.
+        let here = (lc.line, lc.col);
+        let better = match anchor {
+            None => true,
+            Some(_) if is_primary && !anchor_is_primary => true,
+            Some(_) if !is_primary && anchor_is_primary => false,
+            Some(a) => here < a,
+        };
+        if better {
+            anchor = Some(here);
+            anchor_is_primary = is_primary;
+        }
+
+        push_marks(
+            &mut marks,
+            &index,
+            text,
+            local_start as usize,
+            local_end,
+            lc.line,
+            is_primary,
+            label.message(),
+        );
     }
 
-    /// Writes the location line, the source line, and the caret line.
-    fn write(&self, out: &mut impl fmt::Write, label: &str) -> fmt::Result {
-        let gutter = decimal_width(self.line_no);
+    let Some((anchor_line, anchor_col)) = anchor else {
+        return Ok(());
+    };
 
-        // Location: `<pad>--> name:line:col`.
-        writeln!(
-            out,
-            "{:gutter$}--> {}:{}:{}",
-            "", self.name, self.line_no, self.col
-        )?;
+    // The gutter is as wide as the largest line number the frame shows.
+    let mut lines: Vec<u32> = marks.iter().map(|m| m.line).collect();
+    lines.sort_unstable();
+    lines.dedup();
+    let max_line = lines.last().copied().unwrap_or(anchor_line);
+    let gw = decimal_width(max_line);
 
-        // Blank rib, then the numbered source line with tabs expanded so the
-        // carets below line up under it.
-        writeln!(out, "{:gutter$} |", "")?;
+    writeln!(
+        out,
+        "{:gw$}--> {}:{anchor_line}:{anchor_col}",
+        "",
+        file.name()
+    )?;
+    writeln!(out, "{:gw$} |", "")?;
+
+    for &line in &lines {
+        let line_text = index
+            .line_span(line)
+            .and_then(|span| text.get(span.start().to_usize()..span.end().to_usize()))
+            .unwrap_or("");
+
         let mut expanded = String::new();
-        expand_tabs(self.line_text, &mut expanded);
-        writeln!(out, "{:>gutter$} | {}", self.line_no, expanded)?;
+        expand_tabs(line_text, &mut expanded);
+        writeln!(out, "{line:>gw$} | {expanded}")?;
 
-        // Caret line: lead in to the span's column, then a run of carets, then the
-        // label. An empty or zero-width span still draws one caret as a pointer.
-        let lead = visual_width(&self.line_text[..self.start_byte]);
-        let span_width = visual_width(&self.line_text[..self.end_byte]).saturating_sub(lead);
-        let carets = span_width.max(1);
-
-        write!(out, "{:gutter$} | {:lead$}", "", "")?;
-        for _ in 0..carets {
-            out.write_char('^')?;
+        // Stack this line's underlines left to right, primary ahead of secondary.
+        let mut row: Vec<&Mark<'_>> = marks.iter().filter(|m| m.line == line).collect();
+        row.sort_by(|a, b| a.lead.cmp(&b.lead).then_with(|| b.primary.cmp(&a.primary)));
+        for mark in row {
+            write!(out, "{:gw$} | {:lead$}", "", "", lead = mark.lead)?;
+            for _ in 0..mark.width {
+                out.write_char(mark.marker)?;
+            }
+            match mark.message {
+                Some(message) => writeln!(out, " {message}")?,
+                None => out.write_char('\n')?,
+            }
         }
-        if label.is_empty() {
-            out.write_char('\n')?;
-        } else {
-            writeln!(out, " {label}")?;
-        }
+    }
 
-        // Closing rib.
-        writeln!(out, "{:gutter$} |", "")
+    writeln!(out, "{:gw$} |", "")
+}
+
+/// Computes the underline marks for one label across every line its span covers,
+/// appending them to `marks`. Local offsets are into `text`; `start_line` is the
+/// 1-based line the span starts on.
+#[allow(clippy::too_many_arguments)]
+fn push_marks<'a>(
+    marks: &mut Vec<Mark<'a>>,
+    index: &span_lang::LineIndex<'_>,
+    text: &str,
+    local_start: usize,
+    local_end: usize,
+    start_line: u32,
+    primary: bool,
+    message: &'a str,
+) {
+    let marker = if primary { '^' } else { '-' };
+
+    // The last line the span touches: the line of its final covered byte, or the
+    // start line for a zero-width span.
+    let end_line = if local_end > local_start {
+        index.line_col(BytePos::new((local_end - 1) as u32)).line
+    } else {
+        start_line
+    };
+
+    for line in start_line..=end_line {
+        let Some(span) = index.line_span(line) else {
+            continue;
+        };
+        let lo = span.start().to_usize();
+        let hi = span.end().to_usize();
+        let Some(line_text) = text.get(lo..hi) else {
+            continue;
+        };
+
+        // Intersect the span with this line's content, then express it as offsets
+        // into the line, floored to character boundaries.
+        let seg_start = local_start.max(lo);
+        let seg_end = local_end.min(hi).max(seg_start);
+        let a = floor_boundary(line_text, seg_start - lo);
+        let b = floor_boundary(line_text, seg_end - lo).max(a);
+
+        let lead = visual_width(&line_text[..a]);
+        let width = visual_width(&line_text[..b]).saturating_sub(lead).max(1);
+
+        let is_last = line == end_line;
+        marks.push(Mark {
+            line,
+            lead,
+            width,
+            marker,
+            message: (is_last && !message.is_empty()).then_some(message),
+            primary,
+        });
     }
 }
 
@@ -288,7 +414,7 @@ fn floor_boundary(s: &str, idx: usize) -> usize {
 
 /// The display width of `s` in columns: every character is one column except a
 /// tab, which advances to the next multiple of [`TAB_WIDTH`]. This is the column
-/// model the caret line is aligned in.
+/// model the underlines are aligned in.
 fn visual_width(s: &str) -> usize {
     let mut col = 0;
     for ch in s.chars() {
@@ -335,7 +461,6 @@ mod tests {
 
     #[test]
     fn test_visual_width_counts_chars_as_one() {
-        // Two characters, four bytes — two columns.
         assert_eq!(visual_width("αβ"), 2);
         assert_eq!(visual_width("abc"), 3);
     }
@@ -343,8 +468,8 @@ mod tests {
     #[test]
     fn test_visual_width_expands_tabs_to_stops() {
         assert_eq!(visual_width("\t"), 4);
-        assert_eq!(visual_width("a\t"), 4); // one char then a tab to column 4
-        assert_eq!(visual_width("abcd\t"), 8); // tab from column 4 to 8
+        assert_eq!(visual_width("a\t"), 4);
+        assert_eq!(visual_width("abcd\t"), 8);
         assert_eq!(visual_width("\t\t"), 8);
     }
 
@@ -360,10 +485,8 @@ mod tests {
 
     #[test]
     fn test_floor_boundary_moves_into_char_start() {
-        // 'α' is bytes 0..2; index 1 floors to 0.
         assert_eq!(floor_boundary("αβ", 1), 0);
         assert_eq!(floor_boundary("αβ", 2), 2);
-        // Past the end clamps to the length.
         assert_eq!(floor_boundary("ab", 9), 2);
     }
 }

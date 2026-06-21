@@ -38,7 +38,7 @@ span back to a file, a line, and a column on its own.
 
 ```toml
 [dependencies]
-diag-lang = "0.2"
+diag-lang = "0.3"
 ```
 
 ---
@@ -91,42 +91,70 @@ assert!(bare.message().is_empty());
 
 ## `Diagnostic`
 
-One thing a compiler stage has to say: a severity, a headline message, and a
-primary label. The primary label is required at construction, so a diagnostic
-always knows where it points. Secondary labels and trailing notes are _(planned,
-v0.3.0)_.
+One thing a compiler stage has to say: a severity, a headline message, a required
+primary label, and optionally secondary labels for related locations plus trailing
+note/help lines. The primary label is required at construction, so a diagnostic
+always knows where it points; the rest are added with chainable `with_*` builders.
 
 ```rust
 use diag_lang::{Diagnostic, Label, Severity, Span};
 
 let diag = Diagnostic::new(
     Severity::Error,
-    "type mismatch",
-    Label::new(Span::new(8, 11), "expected `Int`, found `Str`"),
-);
-assert_eq!(diag.severity(), Severity::Error);
-assert_eq!(diag.message(), "type mismatch");
+    "mismatched types",
+    Label::new(Span::new(20, 27), "expected `i32`, found `&str`"),
+)
+.with_secondary(Label::new(Span::new(8, 11), "expected due to this"))
+.with_note("string literals have type `&str`")
+.with_help("convert with `.parse()`");
+
+assert_eq!(diag.secondary().len(), 1);
+assert_eq!(diag.notes().count(), 1);
 ```
 
 | Method | Description |
 |--------|-------------|
 | `new(severity: Severity, message: impl Into<Box<str>>, primary: Label) -> Diagnostic` | Builds a diagnostic pointing at `primary`. |
+| `with_secondary(self, label: Label) -> Diagnostic` | Adds a secondary label (rendered with a `-` underline). |
+| `with_note(self, note: impl Into<Box<str>>) -> Diagnostic` | Adds a trailing `note:` line. |
+| `with_help(self, help: impl Into<Box<str>>) -> Diagnostic` | Adds a trailing `help:` line. |
 | `severity(&self) -> Severity` | The level it reports at. |
 | `message(&self) -> &str` | The headline message. |
 | `primary(&self) -> &Label` | The primary label — the span the caret underlines. |
+| `secondary(&self) -> &[Label]` | The secondary labels, in the order added. |
+| `notes(&self) -> impl ExactSizeIterator<Item = &str>` | The note lines, in order. |
+| `help(&self) -> impl ExactSizeIterator<Item = &str>` | The help lines, in order. |
 
 Constructing a diagnostic is on the front-end's hot path: it allocates only what
-the message and label text require.
+the message, labels, and notes require.
 
 ---
 
 ## `Renderer`
 
-Turns a `Diagnostic` plus a `SourceMap` into aligned, caret-annotated text.
-Alignment is computed in display columns — a multi-byte UTF-8 character is one
-column, and a tab expands to the next four-column tab stop — so the carets line up
-under the source whatever it contains. The output is deterministic and always ends
-with a newline.
+Turns a `Diagnostic` plus a `SourceMap` into aligned, caret-annotated text — `^`
+under the primary label, `-` under secondaries. Alignment is computed in display
+columns — a multi-byte UTF-8 character is one column, and a tab expands to the next
+four-column tab stop — so the underlines line up under the source whatever it
+contains. The output is deterministic and always ends with a newline.
+
+A span covering several lines underlines each line it touches, with the message on
+the last. Labels are grouped into one frame per source file — the primary's file
+first, the rest in map order — and within a frame each labelled line is shown once
+with its underlines stacked beneath. Trailing `note:` and `help:` lines close the
+output. The frame order depends on where labels point, not on the order they were
+added.
+
+```text
+error: mismatched types
+ --> main.rs:2:5
+  |
+1 | let x: i32 =
+  |        --- expected due to this
+2 |     "hi";
+  |     ^^^^ expected `i32`, found `&str`
+  |
+```
 
 ```rust
 use diag_lang::{Diagnostic, Label, Renderer, Severity, SourceMap, Span};

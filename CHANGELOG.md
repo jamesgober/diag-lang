@@ -21,6 +21,26 @@
 
 ---
 
+## [0.3.0] - 2026-06-20
+
+Multi-line spans, secondary labels, and trailing notes — the full frame.
+
+### Added
+
+- `Diagnostic::with_secondary` for related-location labels, rendered with a `-` underline.
+- `Diagnostic::with_note` and `with_help` for trailing `note:`/`help:` lines.
+- `Diagnostic::secondary`, `notes`, and `help` accessors.
+- Multi-line span rendering: a span underlines every line it covers, with the message on the last.
+- Per-file frames: labels are grouped by source — the primary's file first, the rest in map order — and each labelled line is shown once with its underlines stacked beneath, in a stable order independent of insertion order.
+- A label whose span falls outside the loaded sources renders a `note:` line rather than being dropped or panicking, including for secondary labels.
+- Snapshot tests for multi-line, multi-label, cross-file, stacked, and note/help layouts; a property test holding many-label rendering total and deterministic.
+
+### Changed
+
+- `Renderer` output now draws a frame per source file and places secondary labels; single-primary single-line output is unchanged.
+
+---
+
 ## [0.2.0] - 2026-06-20
 
 The diagnostic model and the caret-aligned single-line renderer — the hard part of
@@ -60,6 +80,7 @@ Initial scaffold and repository bootstrap. No domain logic yet &mdash; this rele
 - `.github/workflows/ci.yml` CI matrix; `deny.toml`, `clippy.toml`, `rustfmt.toml`.
 - `dev/DIRECTIVES.md` and `dev/ROADMAP.md` (committed engineering standards + plan).
 
-[Unreleased]: https://github.com/jamesgober/diag-lang/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/jamesgober/diag-lang/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jamesgober/diag-lang/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jamesgober/diag-lang/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jamesgober/diag-lang/releases/tag/v0.1.0
