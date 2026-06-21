@@ -37,7 +37,7 @@
 
 ```toml
 [dependencies]
-diag-lang = "0.3"
+diag-lang = "0.4"
 ```
 
 <br>
@@ -72,7 +72,7 @@ error: cannot find value `foo` in this scope
 
 ## Status
 
-This is <code>v0.3.0</code>: the diagnostic model (<code>Severity</code>, <code>Label</code>, <code>Diagnostic</code>) and the renderer handle multi-line spans, secondary labels, and trailing notes/help — the full frame — with alignment proven over multi-byte UTF-8 and tab expansion. Colour/styling and a swappable output seam land at <code>v0.4.0</code> per the <a href="./dev/ROADMAP.md"><code>ROADMAP</code></a> and <a href="./docs/API.md"><code>docs/API.md</code></a>.
+This is <code>v0.4.0</code>: the full diagnostic model and renderer — multi-line spans, secondary labels, notes/help, and optional ANSI colour (the `color` feature) with plain output staying complete. The surface is feature-complete and documented as the freeze candidate in <a href="./docs/API.md"><code>docs/API.md</code></a>; <code>1.0.0</code> freezes it under SemVer. See the <a href="./dev/ROADMAP.md"><code>ROADMAP</code></a>.
 
 <hr>
 <br>

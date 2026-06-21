@@ -21,6 +21,25 @@
 
 ---
 
+## [0.4.0] - 2026-06-20
+
+Optional ANSI styling and the declared freeze candidate for 1.0.
+
+### Added
+
+- `color` feature (default) and `Renderer::with_color`: ANSI styling coloured by severity, with the gutter, underlines, and markers wrapped in escapes. Plain output is unchanged and stripping the escapes from a coloured render reproduces it byte for byte.
+- `docs/API.md` now documents the complete surface as the 1.0 freeze candidate, including what is deliberately left out and addable later without a breaking change.
+
+### Changed
+
+- `Renderer` carries a private colour flag; `Renderer::new()` still produces plain output, so default rendering is byte-identical to v0.3.0.
+
+### Notes
+
+- The output seam is `Renderer::render_to`, which writes into any `core::fmt::Write`. A `Render` trait abstracting the renderer itself is deliberately deferred (single implementor today); see `dev/NOTES.md`.
+
+---
+
 ## [0.3.0] - 2026-06-20
 
 Multi-line spans, secondary labels, and trailing notes — the full frame.
@@ -80,7 +99,8 @@ Initial scaffold and repository bootstrap. No domain logic yet &mdash; this rele
 - `.github/workflows/ci.yml` CI matrix; `deny.toml`, `clippy.toml`, `rustfmt.toml`.
 - `dev/DIRECTIVES.md` and `dev/ROADMAP.md` (committed engineering standards + plan).
 
-[Unreleased]: https://github.com/jamesgober/diag-lang/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/jamesgober/diag-lang/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jamesgober/diag-lang/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jamesgober/diag-lang/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jamesgober/diag-lang/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jamesgober/diag-lang/releases/tag/v0.1.0

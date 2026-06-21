@@ -14,6 +14,73 @@ use crate::{Diagnostic, Label};
 /// can be aligned without knowing the reader's terminal tab settings.
 const TAB_WIDTH: usize = 4;
 
+/// The ANSI styling applied to each part of a frame.
+///
+/// Every field is an SGR escape prefix that pairs with [`reset`](Palette::reset);
+/// the [`PLAIN`](Palette::PLAIN) palette leaves them all empty, so the writers
+/// produce byte-identical uncoloured output without a separate code path.
+struct Palette {
+    /// The severity word in the header.
+    header: &'static str,
+    /// The `-->`, the `|` rib, and the line numbers.
+    gutter: &'static str,
+    /// The primary `^` underline and its message.
+    primary: &'static str,
+    /// The secondary `-` underline and its message.
+    secondary: &'static str,
+    /// The `note:` marker.
+    note: &'static str,
+    /// The `help:` marker.
+    help: &'static str,
+    /// Resets styling back to the terminal default.
+    reset: &'static str,
+}
+
+impl Palette {
+    /// No styling: every part is rendered as plain text.
+    const PLAIN: Palette = Palette {
+        header: "",
+        gutter: "",
+        primary: "",
+        secondary: "",
+        note: "",
+        help: "",
+        reset: "",
+    };
+
+    /// The palette for a coloured frame at `severity`.
+    #[cfg(feature = "color")]
+    fn coloured(severity: crate::Severity) -> Palette {
+        use crate::Severity;
+        // Bold colours: the error level drives the header and primary underline.
+        let sev = match severity {
+            Severity::Error => "\x1b[1;31m",   // red
+            Severity::Warning => "\x1b[1;33m", // yellow
+            Severity::Note => "\x1b[1;32m",    // green
+            Severity::Help => "\x1b[1;36m",    // cyan
+        };
+        Palette {
+            header: sev,
+            gutter: "\x1b[1;34m", // blue
+            primary: sev,
+            secondary: "\x1b[1;34m", // blue
+            note: "\x1b[1m",         // bold, default colour
+            help: "\x1b[1;36m",      // cyan
+            reset: "\x1b[0m",
+        }
+    }
+
+    /// The styling for an underline of the given kind.
+    #[inline]
+    const fn marker(&self, primary: bool) -> &'static str {
+        if primary {
+            self.primary
+        } else {
+            self.secondary
+        }
+    }
+}
+
 /// Renders a [`Diagnostic`] against a [`SourceMap`] into aligned, caret-annotated
 /// text in the style of a modern toolchain.
 ///
@@ -69,10 +136,16 @@ const TAB_WIDTH: usize = 4;
 /// ```
 #[non_exhaustive]
 #[derive(Clone, Debug, Default)]
-pub struct Renderer {}
+pub struct Renderer {
+    /// Whether to wrap output in ANSI styling. Only present, and only ever true,
+    /// with the `color` feature; the default is plain.
+    #[cfg(feature = "color")]
+    color: bool,
+}
 
 impl Renderer {
-    /// Creates a renderer with the default layout.
+    /// Creates a renderer with the default layout, producing plain (uncoloured)
+    /// output.
     ///
     /// # Examples
     ///
@@ -85,7 +158,62 @@ impl Renderer {
     #[inline]
     #[must_use]
     pub fn new() -> Self {
-        Self {}
+        Self::default()
+    }
+
+    /// Enables ANSI styling: the severity word, the underlines, and the frame are
+    /// coloured for a terminal.
+    ///
+    /// Colour is additive — the layout, alignment, and text are identical to the
+    /// plain output, only wrapped in ANSI escape codes. Enable it when writing to a
+    /// terminal; leave it off (the default) when writing to a file, a string, or
+    /// any sink that does not interpret the codes. The error level drives the
+    /// colours: red for an error, yellow for a warning, green for a note, cyan for
+    /// help.
+    ///
+    /// Requires the `color` feature.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use diag_lang::{Diagnostic, Label, Renderer, Severity, SourceMap, Span};
+    ///
+    /// let mut map = SourceMap::new();
+    /// map.add("m.rs", "let x = 1;").expect("fits");
+    /// let diag = Diagnostic::new(
+    ///     Severity::Error,
+    ///     "boom",
+    ///     Label::new(Span::new(4, 5), "here"),
+    /// );
+    ///
+    /// let coloured = Renderer::new().with_color().render(&diag, &map);
+    /// assert!(coloured.contains('\u{1b}')); // contains ANSI escapes
+    /// ```
+    #[cfg(feature = "color")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "color")))]
+    #[inline]
+    #[must_use]
+    pub fn with_color(mut self) -> Self {
+        self.color = true;
+        self
+    }
+
+    /// The palette to render with: coloured for `severity` when styling is on,
+    /// plain otherwise.
+    #[cfg(feature = "color")]
+    fn palette(&self, severity: crate::Severity) -> Palette {
+        if self.color {
+            Palette::coloured(severity)
+        } else {
+            Palette::PLAIN
+        }
+    }
+
+    /// The palette to render with. Without the `color` feature there is only the
+    /// plain one.
+    #[cfg(not(feature = "color"))]
+    fn palette(&self, _severity: crate::Severity) -> Palette {
+        Palette::PLAIN
     }
 
     /// Renders `diag` against `map` and returns the result as an owned `String`.
@@ -165,7 +293,16 @@ impl Renderer {
         diag: &Diagnostic,
         map: &SourceMap,
     ) -> fmt::Result {
-        writeln!(out, "{}: {}", diag.severity().as_str(), diag.message())?;
+        let palette = self.palette(diag.severity());
+
+        writeln!(
+            out,
+            "{h}{}{r}: {}",
+            diag.severity().as_str(),
+            diag.message(),
+            h = palette.header,
+            r = palette.reset
+        )?;
 
         // Split every label into the source it resolves against, keeping any that
         // resolve nowhere for a trailing note. The primary leads, so its file
@@ -180,21 +317,33 @@ impl Renderer {
         }
 
         for id in frame_order(&located) {
-            write_frame(out, map, id, &located)?;
+            write_frame(out, map, id, &located, &palette)?;
         }
 
         for label in &unlocated {
             writeln!(
                 out,
-                " = note: span {} is outside the loaded sources",
-                label.span()
+                " = {n}note:{r} span {} is outside the loaded sources",
+                label.span(),
+                n = palette.note,
+                r = palette.reset
             )?;
         }
         for note in diag.notes() {
-            writeln!(out, " = note: {note}")?;
+            writeln!(
+                out,
+                " = {n}note:{r} {note}",
+                n = palette.note,
+                r = palette.reset
+            )?;
         }
         for help in diag.help() {
-            writeln!(out, " = help: {help}")?;
+            writeln!(
+                out,
+                " = {h}help:{r} {help}",
+                h = palette.help,
+                r = palette.reset
+            )?;
         }
 
         Ok(())
@@ -242,6 +391,7 @@ fn write_frame(
     map: &SourceMap,
     id: SourceId,
     located: &[(SourceId, bool, &Label)],
+    palette: &Palette,
 ) -> fmt::Result {
     let Some(file) = map.source(id) else {
         return Ok(());
@@ -299,13 +449,16 @@ fn write_frame(
     let max_line = lines.last().copied().unwrap_or(anchor_line);
     let gw = decimal_width(max_line);
 
+    let g = palette.gutter;
+    let r = palette.reset;
+
     writeln!(
         out,
-        "{:gw$}--> {}:{anchor_line}:{anchor_col}",
+        "{:gw$}{g}-->{r} {}:{anchor_line}:{anchor_col}",
         "",
         file.name()
     )?;
-    writeln!(out, "{:gw$} |", "")?;
+    writeln!(out, "{:gw$} {g}|{r}", "")?;
 
     for &line in &lines {
         let line_text = index
@@ -315,24 +468,25 @@ fn write_frame(
 
         let mut expanded = String::new();
         expand_tabs(line_text, &mut expanded);
-        writeln!(out, "{line:>gw$} | {expanded}")?;
+        writeln!(out, "{g}{line:>gw$}{r} {g}|{r} {expanded}")?;
 
         // Stack this line's underlines left to right, primary ahead of secondary.
         let mut row: Vec<&Mark<'_>> = marks.iter().filter(|m| m.line == line).collect();
         row.sort_by(|a, b| a.lead.cmp(&b.lead).then_with(|| b.primary.cmp(&a.primary)));
         for mark in row {
-            write!(out, "{:gw$} | {:lead$}", "", "", lead = mark.lead)?;
+            let mc = palette.marker(mark.primary);
+            write!(out, "{:gw$} {g}|{r} {:lead$}{mc}", "", "", lead = mark.lead)?;
             for _ in 0..mark.width {
                 out.write_char(mark.marker)?;
             }
             match mark.message {
-                Some(message) => writeln!(out, " {message}")?,
-                None => out.write_char('\n')?,
+                Some(message) => writeln!(out, " {message}{r}")?,
+                None => writeln!(out, "{r}")?,
             }
         }
     }
 
-    writeln!(out, "{:gw$} |", "")
+    writeln!(out, "{:gw$} {g}|{r}", "")
 }
 
 /// Computes the underline marks for one label across every line its span covers,

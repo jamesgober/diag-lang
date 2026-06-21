@@ -3,7 +3,7 @@
 # =============================================================================
 [package]
 name    = "diag-lang"
-version = "0.3.0"
+version = "0.4.0"
 
 # Minimum Supported Rust Version (MSRV)
 rust-version = "1.85"
@@ -44,8 +44,10 @@ path = "src/lib.rs"
 # FEATURE FLAGS
 # #################################
 [features]
-default = ["std"]
+default = ["std", "color"]
 std = ["span-lang/std", "source-lang/std"]
+# ANSI styling for terminal output; plain output stays complete without it.
+color = []
 
 
 # DEPENDENCIES

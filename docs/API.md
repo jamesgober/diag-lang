@@ -38,7 +38,7 @@ span back to a file, a line, and a column on its own.
 
 ```toml
 [dependencies]
-diag-lang = "0.3"
+diag-lang = "0.4"
 ```
 
 ---
@@ -180,9 +180,16 @@ error: cannot find value `foo` in this scope
 
 | Method | Description |
 |--------|-------------|
-| `new() -> Renderer` | A renderer with the default layout. |
+| `new() -> Renderer` | A renderer with the default layout, producing plain output. |
+| `with_color(self) -> Renderer` | Enables ANSI styling. Requires the `color` feature. |
 | `render(&self, diag: &Diagnostic, map: &SourceMap) -> String` | Renders into a fresh `String`. |
 | `render_to(&self, out: &mut impl fmt::Write, diag: &Diagnostic, map: &SourceMap) -> fmt::Result` | Renders into a sink you own — reuse a buffer to avoid a per-diagnostic allocation. |
+
+`render_to` is the output seam: it writes into any `core::fmt::Write`, so the same
+renderer drives a terminal, a string, a reused buffer, or a formatter. `with_color`
+(with the `color` feature) wraps the output in ANSI escapes coloured by severity;
+stripping those escapes reproduces the plain output byte for byte, so colour only
+ever adds.
 
 A span that cannot be located in the map — past the end of the sources, or an
 offset no source covers — renders the header plus a defined note rather than
@@ -193,8 +200,7 @@ error: unexpected end of input
  = note: span 10..12 is outside the loaded sources
 ```
 
-`Renderer` is `#[non_exhaustive]`; build it with `new()` or `Default`. Styling and
-a swappable output seam are _(planned, v0.4.0)_.
+`Renderer` is `#[non_exhaustive]`; build it with `new()` or `Default`.
 
 ---
 
@@ -214,9 +220,30 @@ spell them:
 | Feature | Default | Description |
 |---------|---------|-------------|
 | `std` | yes | Standard library. With it off, the crate is `no_std` (it always needs `alloc`). Forwards to `span-lang/std` and `source-lang/std`. |
+| `color` | yes | ANSI styling via `Renderer::with_color`. Disable it, or never call `with_color`, for plain output — which is complete and identically aligned. |
 
-Colour/styling behind a feature is _(planned, v0.4.0)_; plain output is complete
-and correctly aligned with no feature enabled.
+---
+
+## Frozen surface
+
+The surface above is the complete public API and is the freeze candidate for
+`1.0.0`. From `1.0.0` it follows Semantic Versioning: no breaking change before
+`2.0`, additions arrive in minor releases, and the MSRV (Rust 1.85) only rises in a
+minor. Items not listed here — internal modules, the exact bytes of a rendered
+frame beyond the documented layout rules — are not part of the contract.
+
+Deliberately left out of the 1.0 surface, addable later without a breaking change:
+
+- **A `Render` trait.** The output *sink* is already swappable through
+  `render_to(&mut impl fmt::Write)`; a trait abstracting the *renderer* has only
+  one implementor today, so freezing its shape now would be speculative. It can be
+  introduced as a minor when a second renderer (for example a structured/JSON
+  target) gives it a second implementor. See `dev/NOTES.md`.
+- **Serialisation.** `Diagnostic` and friends do not derive `serde`; a consumer
+  that needs to serialise can map the public accessors. A `serde` feature can be
+  added later as a non-breaking minor.
+- **Configurable tab width.** The tab stop is fixed at four columns; a
+  `with_tab_width` setter can be added without breaking the surface.
 
 ---
 

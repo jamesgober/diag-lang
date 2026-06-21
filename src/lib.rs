@@ -36,6 +36,29 @@
 //! let rendered = Renderer::new().render(&diag, &map);
 //! assert!(rendered.contains("^^^ not found in this scope"));
 //! ```
+//!
+//! ## Output
+//!
+//! [`Renderer::render`] returns a `String`; [`Renderer::render_to`] writes into
+//! any [`core::fmt::Write`] sink, so the same renderer feeds a terminal, a reused
+//! buffer, or a formatter without an intermediate allocation. With the `color`
+//! feature, [`Renderer::with_color`] wraps the output in ANSI styling; the plain
+//! output is complete and identically aligned, so colour only ever adds.
+//!
+//! ## Features
+//!
+//! - `std` (default) — the standard library; without it the crate is `no_std`
+//!   (it always needs `alloc`). Forwards to `span-lang/std` and `source-lang/std`.
+//! - `color` (default) — ANSI styling via [`Renderer::with_color`]. Disable it,
+//!   or simply never call `with_color`, for plain output.
+//!
+//! ## Stability
+//!
+//! The public surface is being designed across the 0.x series and freezes at
+//! `1.0.0`, after which it follows Semantic Versioning: no breaking changes before
+//! `2.0`, additions arrive in minor releases, and the MSRV (Rust 1.85) only rises
+//! in a minor. The frozen surface is catalogued in
+//! [`docs/API.md`](https://github.com/jamesgober/diag-lang/blob/main/docs/API.md).
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
