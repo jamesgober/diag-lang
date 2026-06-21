@@ -3,7 +3,7 @@
 # =============================================================================
 [package]
 name    = "diag-lang"
-version = "0.1.0"
+version = "0.2.0"
 
 # Minimum Supported Rust Version (MSRV)
 rust-version = "1.85"
@@ -45,15 +45,16 @@ path = "src/lib.rs"
 # #################################
 [features]
 default = ["std"]
-std = []
-# Serialization support.
-serde = ["dep:serde"]
+std = ["span-lang/std", "source-lang/std"]
 
 
 # DEPENDENCIES
 # #################################
 [dependencies]
-serde = { version = "1", optional = true, default-features = false, features = ["derive", "alloc"] }
+# Byte positions and spans: the coordinate substrate a label points with.
+span-lang = { version = "0.4", default-features = false }
+# Source storage and the global position space a span is resolved against.
+source-lang = { version = "1", default-features = false }
 
 
 # DEV DEPENDENCIES

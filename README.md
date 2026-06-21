@@ -37,14 +37,42 @@
 
 ```toml
 [dependencies]
-diag-lang = "0.1"
+diag-lang = "0.2"
+```
+
+<br>
+
+## Example
+
+```rust
+use diag_lang::{Diagnostic, Label, Renderer, Severity, SourceMap, Span};
+
+let mut map = SourceMap::new();
+map.add("main.rs", "fn main() {\n    let x = foo();\n}\n").unwrap();
+
+let diag = Diagnostic::new(
+    Severity::Error,
+    "cannot find value `foo` in this scope",
+    Label::new(Span::new(24, 27), "not found in this scope"),
+);
+
+print!("{}", Renderer::new().render(&diag, &map));
+```
+
+```text
+error: cannot find value `foo` in this scope
+ --> main.rs:2:13
+  |
+2 |     let x = foo();
+  |             ^^^ not found in this scope
+  |
 ```
 
 <br>
 
 ## Status
 
-This is the <code>v0.1.0</code> scaffold: structure, tooling, and quality gates are in place; the implementation lands across the 0.x series per the <a href="./dev/ROADMAP.md"><code>ROADMAP</code></a> and <a href="./docs/API.md"><code>docs/API.md</code></a>.
+This is <code>v0.2.0</code>: the diagnostic model (<code>Severity</code>, <code>Label</code>, <code>Diagnostic</code>) and the single-line caret renderer are in place, with caret alignment proven over multi-byte UTF-8 and tab expansion. Multi-line spans, secondary labels, and styling land across the rest of the 0.x series per the <a href="./dev/ROADMAP.md"><code>ROADMAP</code></a> and <a href="./docs/API.md"><code>docs/API.md</code></a>.
 
 <hr>
 <br>
