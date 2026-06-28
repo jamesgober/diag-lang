@@ -5,9 +5,14 @@ pre-1.0 stop point. Lives alongside `DIRECTIVES.md` and `ROADMAP.md` in `dev/`.
 
 ---
 
-## Parked for review
+## Resolved
 
-### A `Render` trait for swappable output targets
+### A `Render` trait for swappable output targets — RESOLVED (defer)
+
+**Decision (2026-06-28):** ship 1.0 without the trait, per the recommendation
+below. The output sink stays swappable via `Renderer::render_to`; a `Render` trait
+can be added as a non-breaking minor when a second renderer gives it a second
+implementor. The rest of the analysis is kept for the record.
 
 **Context.** `dev/ROADMAP.md` for v0.4.0 lists "a renderer trait so output targets
 are swappable (terminal, plain string, structured)". This is potentially a
@@ -50,11 +55,11 @@ decide.
 
 ---
 
-## STATUS — stopped at the pre-1.0 freeze point
+## STATUS — 1.0.0, frozen
 
-The crate is built through the full 0.x roadmap and sits at the last green commit
-before `1.0.0`. `1.0.0` (the freeze tag and release) is left for you, per the build
-directive.
+The crate is built through the full 0.x roadmap and the `1.0.0` API freeze.
+Engineering is complete and green; the commit, tag (`v1.0.0`), push, and
+`cargo publish` are left for you, as requested.
 
 **Done — v0.2.0 → v0.4.0, each committed green:**
 
@@ -90,7 +95,7 @@ frame snapshot + 4 colour + 4 property + 24 doctests.
   and the rendered byte format is not part of the frozen contract, so a fancier
   frame style remains a non-breaking output change later.
 
-**Needs your decision before 1.0:**
+**Decisions resolved at the freeze:**
 
-- The `Render` trait question above. My recommendation is to ship 1.0 without it
-  and add it when a second renderer exists. Everything else is ready to freeze.
+- The `Render` trait is deferred (see above). No other open questions; the surface
+  is frozen as documented in `docs/API.md`.

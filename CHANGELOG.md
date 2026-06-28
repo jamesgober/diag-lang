@@ -21,6 +21,25 @@
 
 ---
 
+## [1.0.0] - 2026-06-28
+
+API freeze. The diagnostic and rendering surface is stable and will not change in a
+breaking way before `2.0`. No functional API changes from `0.4.0`.
+
+### Changed
+
+- The public API is declared stable under Semantic Versioning; `docs/API.md`
+  catalogues the frozen surface and the SemVer promise.
+
+### Notes
+
+- A `Render` trait was considered and deliberately left out of 1.0: the output sink
+  is already swappable via `Renderer::render_to`, and a trait with a single
+  implementor would be speculative. It can be added as a non-breaking minor when a
+  second renderer exists.
+
+---
+
 ## [0.4.0] - 2026-06-20
 
 Optional ANSI styling and the declared freeze candidate for 1.0.
@@ -99,7 +118,8 @@ Initial scaffold and repository bootstrap. No domain logic yet &mdash; this rele
 - `.github/workflows/ci.yml` CI matrix; `deny.toml`, `clippy.toml`, `rustfmt.toml`.
 - `dev/DIRECTIVES.md` and `dev/ROADMAP.md` (committed engineering standards + plan).
 
-[Unreleased]: https://github.com/jamesgober/diag-lang/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/jamesgober/diag-lang/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/jamesgober/diag-lang/compare/v0.4.0...v1.0.0
 [0.4.0]: https://github.com/jamesgober/diag-lang/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jamesgober/diag-lang/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jamesgober/diag-lang/compare/v0.1.0...v0.2.0

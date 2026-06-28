@@ -1,7 +1,7 @@
 # diag-lang &mdash; API Reference
 
 > Complete reference for every public item in `diag-lang`, with examples.
-> **Status: pre-1.0 — the surface is built across the 0.x series and frozen at `1.0.0`.** Items marked _(planned)_ are not yet implemented; see [`dev/ROADMAP.md`](../dev/ROADMAP.md).
+> **Status: stable as of `1.0.0`.** The surface below is frozen under Semantic Versioning — no breaking changes before `2.0`.
 
 ## Table of Contents
 
@@ -38,7 +38,7 @@ span back to a file, a line, and a column on its own.
 
 ```toml
 [dependencies]
-diag-lang = "0.4"
+diag-lang = "1"
 ```
 
 ---
@@ -226,19 +226,20 @@ spell them:
 
 ## Frozen surface
 
-The surface above is the complete public API and is the freeze candidate for
-`1.0.0`. From `1.0.0` it follows Semantic Versioning: no breaking change before
-`2.0`, additions arrive in minor releases, and the MSRV (Rust 1.85) only rises in a
-minor. Items not listed here — internal modules, the exact bytes of a rendered
-frame beyond the documented layout rules — are not part of the contract.
+The surface above is the complete public API, frozen as of `1.0.0`. It follows
+Semantic Versioning: no breaking change before `2.0`, additions arrive in minor
+releases, and the MSRV (Rust 1.85) only rises in a minor. Items not listed here —
+internal modules, the exact bytes of a rendered frame beyond the documented layout
+rules — are not part of the contract.
 
-Deliberately left out of the 1.0 surface, addable later without a breaking change:
+Deliberately left out of the 1.0 surface, each addable later without a breaking
+change:
 
 - **A `Render` trait.** The output *sink* is already swappable through
   `render_to(&mut impl fmt::Write)`; a trait abstracting the *renderer* has only
   one implementor today, so freezing its shape now would be speculative. It can be
   introduced as a minor when a second renderer (for example a structured/JSON
-  target) gives it a second implementor. See `dev/NOTES.md`.
+  target) gives it a second implementor.
 - **Serialisation.** `Diagnostic` and friends do not derive `serde`; a consumer
   that needs to serialise can map the public accessors. A `serde` feature can be
   added later as a non-breaking minor.

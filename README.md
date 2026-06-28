@@ -26,7 +26,7 @@
         <strong>MSRV is 1.85+</strong> (Rust 2024 edition).
     </p>
     <blockquote>
-        <strong>Status: pre-1.0, in active development.</strong> The public API is being designed across the 0.x series and frozen at <code>1.0.0</code>. See <a href="./CHANGELOG.md"><code>CHANGELOG.md</code></a>.
+        <strong>Status: stable.</strong> The public API is frozen as of <code>1.0.0</code> and follows Semantic Versioning &mdash; no breaking changes before <code>2.0</code>. See <a href="./CHANGELOG.md"><code>CHANGELOG.md</code></a>.
     </blockquote>
 </div>
 
@@ -37,7 +37,7 @@
 
 ```toml
 [dependencies]
-diag-lang = "0.4"
+diag-lang = "1"
 ```
 
 <br>
@@ -72,7 +72,7 @@ error: cannot find value `foo` in this scope
 
 ## Status
 
-This is <code>v0.4.0</code>: the full diagnostic model and renderer — multi-line spans, secondary labels, notes/help, and optional ANSI colour (the `color` feature) with plain output staying complete. The surface is feature-complete and documented as the freeze candidate in <a href="./docs/API.md"><code>docs/API.md</code></a>; <code>1.0.0</code> freezes it under SemVer. See the <a href="./dev/ROADMAP.md"><code>ROADMAP</code></a>.
+This is <code>v1.0.0</code>: the public API is stable and frozen under SemVer. The diagnostic model and renderer are complete — multi-line spans, secondary labels, notes/help, and optional ANSI colour (the `color` feature) with plain output staying complete and correctly aligned. The full surface is catalogued in <a href="./docs/API.md"><code>docs/API.md</code></a>.
 
 <hr>
 <br>

@@ -54,10 +54,9 @@
 //!
 //! ## Stability
 //!
-//! The public surface is being designed across the 0.x series and freezes at
-//! `1.0.0`, after which it follows Semantic Versioning: no breaking changes before
-//! `2.0`, additions arrive in minor releases, and the MSRV (Rust 1.85) only rises
-//! in a minor. The frozen surface is catalogued in
+//! The public API is stable as of `1.0` and follows Semantic Versioning: no
+//! breaking changes before `2.0`, additions arrive in minor releases, and the MSRV
+//! (Rust 1.85) only rises in a minor. The full surface is catalogued in
 //! [`docs/API.md`](https://github.com/jamesgober/diag-lang/blob/main/docs/API.md).
 
 #![cfg_attr(not(feature = "std"), no_std)]
