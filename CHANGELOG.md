@@ -21,6 +21,65 @@
 
 ---
 
+## [1.0.1] - 2026-10-08
+
+A patch release: no public API changes. It fixes end-of-input rendering (ISSUES
+H04), terminal injection (M15), quadratic multi-line rendering (M16), the per-frame
+line-index rebuild (M17), and caret alignment under wide characters (M18).
+
+### Fixed
+
+- **End-of-input errors render with their source frame (H04).** A label at
+  `Span::empty(len)` (where lang-forge and any parser report "found end of input")
+  used to render as `span N..N is outside the loaded sources` with no frame. It now
+  renders in the source's frame wherever source-lang 1.0.1 attributes the position
+  to that source (a single source, or the most recently added one), with the caret
+  just after the last character of the last line, including sources without a
+  trailing newline (`a = b +` → caret after `+`), `\r\n` endings, and empty
+  sources (`1:1`). The frame's `--> file:line:col` header always names exactly the
+  caret's line and column. Known limitation, from source-lang's contiguous 1.x
+  layout: the end of a source that is not the last one is the same position as the
+  next source's first byte, so an end-of-input label there renders at the next
+  source's `1:1` (fixed by source-lang 2.0).
+- **Wide and combining characters align (M18).** Caret placement and width use
+  Unicode display width (`unicode-lang`'s `char_width`): CJK and wide emoji take two
+  columns, combining marks none. Tab stops are computed in the same display columns.
+
+### Security
+
+- **Control characters are escaped (M15).** Source lines, the message, label
+  messages, notes, help, and file names are written with C0/C1 controls (including
+  `ESC`, so no ANSI/OSC sequence from untrusted input reaches a terminal), `DEL`,
+  carriage returns, U+2028/U+2029, and the bidi override/isolate/mark controls
+  escaped visibly as `\u{..}`. Tabs are kept; newlines are kept in messages, notes,
+  and help (layout) and escaped in file names.
+
+### Changed
+
+- **Long multi-line spans are elided (M16).** A span over more than five lines shows
+  its first two and last two lines with a `...` line between; spans of up to five
+  lines render exactly as before. Marks are grouped by line in one sorted pass and
+  frames by file in one pass, so rendering is no longer quadratic in the number of
+  covered lines or labels.
+- **No line index per frame (M17).** Line numbers come from source-lang 1.0.1's
+  cached line table and line boundaries from a scan outward from each label, so a
+  frame costs what it prints plus `O(log lines)` per label. Rendering a label over a
+  whole 50,000-line file: 1.2042 s before, 1.6903 µs after; a one-line label:
+  963.76 ns before, 765.22 ns after.
+
+### Dependencies
+
+- `source-lang` requirement raised from `"1"` to `"1.0.1"`: the end-of-input
+  resolution (the end of the last source resolves to it) and the cached line table
+  this release relies on are source-lang 1.0.1 behaviour. Publish source-lang 1.0.1
+  first.
+- **New dependency: `unicode-lang = "1"`** (`default-features = false`, so `no_std`
+  is kept), a first-party `-lang` crate from crates.io with zero dependencies of its
+  own, for display width. Adding it in a patch release is a deliberate exception,
+  limited to first-party crates.
+
+---
+
 ## [1.0.0] - 2026-06-28
 
 API freeze. The diagnostic and rendering surface is stable and will not change in a
@@ -118,7 +177,8 @@ Initial scaffold and repository bootstrap. No domain logic yet &mdash; this rele
 - `.github/workflows/ci.yml` CI matrix; `deny.toml`, `clippy.toml`, `rustfmt.toml`.
 - `dev/DIRECTIVES.md` and `dev/ROADMAP.md` (committed engineering standards + plan).
 
-[Unreleased]: https://github.com/jamesgober/diag-lang/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/jamesgober/diag-lang/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/jamesgober/diag-lang/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/jamesgober/diag-lang/compare/v0.4.0...v1.0.0
 [0.4.0]: https://github.com/jamesgober/diag-lang/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jamesgober/diag-lang/compare/v0.2.0...v0.3.0

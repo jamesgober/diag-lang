@@ -13,10 +13,19 @@
 //!
 //! ## Alignment
 //!
-//! The caret line is aligned in display columns, not bytes: a multi-byte UTF-8
-//! character counts as one column, and a tab advances to the next tab stop. The
-//! same diagnostic always renders byte-identical output, and a span that falls
-//! outside the loaded sources renders a defined note rather than panicking.
+//! The caret line is aligned in terminal display columns, not bytes: each
+//! character takes its Unicode display width (two columns for CJK and wide emoji,
+//! none for a combining mark), and a tab advances to the next tab stop. The same
+//! diagnostic always renders byte-identical output, a zero-width label at the end
+//! of a source renders in that source's frame, and a span that falls outside the
+//! loaded sources renders a defined note rather than panicking.
+//!
+//! ## Untrusted text
+//!
+//! Every caller-supplied string the renderer writes (source lines, messages,
+//! labels, notes, help, file names) has its control characters escaped visibly
+//! as `\u{..}`, so a hostile source or message cannot inject terminal escape
+//! sequences. See [`Renderer`] for the exact set.
 //!
 //! ## Quickstart
 //!

@@ -110,12 +110,15 @@ fn test_secondary_label_in_another_file_gets_its_own_frame() {
     let a = "pub fn foo() {}";
     map.add("a.rs", a).unwrap(); // global 0..15
     let b = "foo(1);";
-    map.add("b.rs", b).unwrap(); // global 15..22
+    // Read the base from the map rather than computing it (contiguous: 15).
+    let b_id = map.add("b.rs", b).unwrap();
+    let b_base = map.source(b_id).unwrap().span().start().to_u32();
+    assert_eq!(b_base, 15);
 
     let diag = Diagnostic::new(
         Severity::Error,
         "this function takes 0 arguments but 1 was supplied",
-        Label::new(span_of(b, "foo", 15), "unexpected argument"),
+        Label::new(span_of(b, "foo", b_base), "unexpected argument"),
     )
     .with_secondary(Label::new(span_of(a, "foo", 0), "defined here"));
 
@@ -235,4 +238,223 @@ error: ordered
   |
 "
     );
+}
+
+// ---------------------------------------------------------------------------
+// 1.0.1 regressions: ISSUES M16 (elision, linear grouping)
+// ---------------------------------------------------------------------------
+
+/// Ten short lines, `l1` through `l10`, each newline-terminated.
+fn ten_lines() -> String {
+    let mut src = String::new();
+    for i in 1..=10 {
+        src.push('l');
+        src.push_str(&i.to_string());
+        src.push('\n');
+    }
+    src
+}
+
+#[test]
+fn test_m16_span_over_five_lines_is_shown_whole() {
+    let src = ten_lines();
+    let mut map = SourceMap::new();
+    map.add("m.rs", src.as_str()).unwrap();
+
+    // l2 through l6: exactly five lines, the most shown without elision.
+    let start = src.find("l2").unwrap() as u32;
+    let end = src.find("l6").unwrap() as u32 + 2;
+    let diag = Diagnostic::new(
+        Severity::Error,
+        "block",
+        Label::new(Span::new(start, end), "five lines"),
+    );
+
+    assert_eq!(
+        Renderer::new().render(&diag, &map),
+        "\
+error: block
+ --> m.rs:2:1
+  |
+2 | l2
+  | ^^
+3 | l3
+  | ^^
+4 | l4
+  | ^^
+5 | l5
+  | ^^
+6 | l6
+  | ^^ five lines
+  |
+"
+    );
+}
+
+#[test]
+fn test_m16_long_span_elides_its_middle() {
+    let src = ten_lines();
+    let mut map = SourceMap::new();
+    map.add("m.rs", src.as_str()).unwrap();
+
+    // l2 through l9: eight lines, so only the first two and last two show.
+    let start = src.find("l2").unwrap() as u32;
+    let end = src.find("l9").unwrap() as u32 + 2;
+    let diag = Diagnostic::new(
+        Severity::Error,
+        "block",
+        Label::new(Span::new(start, end), "whole block"),
+    );
+
+    assert_eq!(
+        Renderer::new().render(&diag, &map),
+        "\
+error: block
+ --> m.rs:2:1
+  |
+2 | l2
+  | ^^
+3 | l3
+  | ^^
+...
+8 | l8
+  | ^^
+9 | l9
+  | ^^ whole block
+  |
+"
+    );
+}
+
+#[test]
+fn test_m16_label_inside_an_elided_span_is_still_shown() {
+    let src = ten_lines();
+    let mut map = SourceMap::new();
+    map.add("m.rs", src.as_str()).unwrap();
+
+    let start = src.find("l2").unwrap() as u32;
+    let end = src.find("l9").unwrap() as u32 + 2;
+    let diag = Diagnostic::new(
+        Severity::Error,
+        "block",
+        Label::new(Span::new(start, end), "outer"),
+    )
+    .with_secondary(Label::new(span_of(&src, "l5", 0), "inner"));
+
+    assert_eq!(
+        Renderer::new().render(&diag, &map),
+        "\
+error: block
+ --> m.rs:2:1
+  |
+2 | l2
+  | ^^
+3 | l3
+  | ^^
+...
+5 | l5
+  | -- inner
+...
+8 | l8
+  | ^^
+9 | l9
+  | ^^ outer
+  |
+"
+    );
+}
+
+#[test]
+fn test_m16_distance_between_unrelated_labels_is_not_an_elision() {
+    let src = ten_lines();
+    let mut map = SourceMap::new();
+    map.add("m.rs", src.as_str()).unwrap();
+
+    // Lines 1 and 7 are far apart, but no span covers the gap: no `...`.
+    let diag = Diagnostic::new(
+        Severity::Error,
+        "apart",
+        Label::new(span_of(&src, "l7", 0), "here"),
+    )
+    .with_secondary(Label::new(span_of(&src, "l1", 0), "and here"));
+
+    assert_eq!(
+        Renderer::new().render(&diag, &map),
+        "\
+error: apart
+ --> m.rs:7:1
+  |
+1 | l1
+  | -- and here
+7 | l7
+  | ^^ here
+  |
+"
+    );
+}
+
+#[test]
+fn test_m16_whole_file_label_on_a_large_file_prints_a_bounded_frame() {
+    let mut src = String::new();
+    for i in 0..50_000 {
+        src.push_str(&format!("line {i}\n"));
+    }
+    let len = src.len() as u32;
+    let mut map = SourceMap::new();
+    map.add("big.rs", src).unwrap();
+
+    let diag = Diagnostic::new(
+        Severity::Error,
+        "everything",
+        Label::new(Span::new(0, len), "all of it"),
+    );
+    let out = Renderer::new().render(&diag, &map);
+
+    assert_eq!(
+        out,
+        "\
+error: everything
+     --> big.rs:1:1
+      |
+    1 | line 0
+      | ^^^^^^
+    2 | line 1
+      | ^^^^^^
+...
+49999 | line 49998
+      | ^^^^^^^^^^
+50000 | line 49999
+      | ^^^^^^^^^^ all of it
+      |
+"
+    );
+}
+
+/// Many labels on many lines group in one pass and keep a stable order.
+#[test]
+fn test_m16_many_labels_render_in_line_order() {
+    let mut src = String::new();
+    for i in 0..200 {
+        src.push_str(&format!("v{i:03}\n"));
+    }
+    let mut map = SourceMap::new();
+    map.add("m.rs", src.as_str()).unwrap();
+
+    let mut diag = Diagnostic::new(
+        Severity::Error,
+        "many",
+        Label::new(span_of(&src, "v199", 0), "last"),
+    );
+    // Secondaries added in reverse line order.
+    for i in (0..199).rev() {
+        diag = diag.with_secondary(Label::new(span_of(&src, &format!("v{i:03}"), 0), "x"));
+    }
+    let out = Renderer::new().render(&diag, &map);
+
+    let shown: Vec<u32> = out
+        .lines()
+        .filter_map(|l| l.split(" | ").next()?.trim().parse().ok())
+        .collect();
+    assert_eq!(shown, (1..=200).collect::<Vec<u32>>());
+    assert!(!out.contains("..."));
 }

@@ -133,17 +133,47 @@ the message, labels, and notes require.
 ## `Renderer`
 
 Turns a `Diagnostic` plus a `SourceMap` into aligned, caret-annotated text — `^`
-under the primary label, `-` under secondaries. Alignment is computed in display
-columns — a multi-byte UTF-8 character is one column, and a tab expands to the next
-four-column tab stop — so the underlines line up under the source whatever it
-contains. The output is deterministic and always ends with a newline.
+under the primary label, `-` under secondaries. Alignment is computed in terminal
+display columns — each character takes its Unicode display width (UAX #11 via
+`unicode-lang`: one column for most text, two for CJK ideographs and wide emoji,
+zero for combining marks), and a tab expands to the next four-column tab stop — so
+the underlines line up under the source whatever it contains. The output is
+deterministic and always ends with a newline.
 
 A span covering several lines underlines each line it touches, with the message on
-the last. Labels are grouped into one frame per source file — the primary's file
-first, the rest in map order — and within a frame each labelled line is shown once
-with its underlines stacked beneath. Trailing `note:` and `help:` lines close the
-output. The frame order depends on where labels point, not on the order they were
-added.
+the last. A span covering **more than five lines** shows only its first two and last
+two lines, with a `...` line in place of the elided middle (a label pointing into
+the elided region is still shown, with `...` on either side). Labels are grouped into
+one frame per source file — the primary's file first, the rest in map order — and
+within a frame each labelled line is shown once with its underlines stacked
+beneath. Trailing `note:` and `help:` lines close the output. The frame order
+depends on where labels point, not on the order they were added.
+
+**End of input.** A zero-width label at the very end of a source — where a "found
+end of input" error points, `Span::empty(len)` — renders in that source's frame
+wherever source-lang (`>= 1.0.1`) attributes the position to it: in a single-source
+map, and for the most recently added source. The caret sits just after the last
+character of the last line (for a text ending in a line break, after the last
+character before that break; for an empty source, at `1:1`), and the frame's
+`--> file:line:col` header names exactly that line and column, so the header and the
+caret never disagree. With one exception, from source-lang's contiguous 1.x layout: the end of a source that
+is not the last one is the same position as the next source's first byte, so an
+end-of-input label there renders at the next source's `1:1` (fixed by
+source-lang 2.0's reserved end positions).
+
+**Untrusted text.** Every caller-supplied string — source lines, the message,
+label messages, notes, help, and file names — is written with its control
+characters escaped visibly as `\u{..}`: C0 and C1 controls (so `ESC`, and with it
+any ANSI/OSC sequence), `DEL`, a carriage return, U+2028/U+2029, and the bidi
+embedding/override/isolate/mark controls. Tabs are kept (expanded in source lines);
+newlines are kept in the message, labels, notes, and help, and escaped in file
+names. The only escape sequences in the output are the renderer's own colours.
+
+**Cost.** Rendering is bounded by what is printed, plus `O(log lines)` per label:
+no line index is built per frame. Line numbers come from source-lang's cached line
+table (`SourceMap::line_col`, source-lang `>= 1.0.1`), and line boundaries are
+found by scanning outward from each label. A label covering a whole 50,000-line file
+prints and costs the same as one covering six lines.
 
 ```text
 error: mismatched types
@@ -191,9 +221,8 @@ renderer drives a terminal, a string, a reused buffer, or a formatter. `with_col
 stripping those escapes reproduces the plain output byte for byte, so colour only
 ever adds.
 
-A span that cannot be located in the map — past the end of the sources, or an
-offset no source covers — renders the header plus a defined note rather than
-panicking:
+A span that cannot be located in the map — past the end of the sources, or on an
+empty map — renders the header plus a defined note rather than panicking:
 
 ```text
 error: unexpected end of input
@@ -245,6 +274,10 @@ change:
   added later as a non-breaking minor.
 - **Configurable tab width.** The tab stop is fixed at four columns; a
   `with_tab_width` setter can be added without breaking the surface.
+- **Grapheme clustering.** Display width is summed per character, so a ZWJ emoji
+  sequence or a flag counts as the sum of its parts, not as one glyph. Terminals
+  disagree on these anyway; a cluster-aware width can be added without changing
+  the API.
 
 ---
 

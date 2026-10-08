@@ -150,3 +150,174 @@ fn alloc_format(a: &str, b: &str, c: &str) -> String {
     s.push_str(c);
     s
 }
+
+/// Whether `c` is a character the renderer must never emit raw (ISSUES M15):
+/// any C0 control but newline (tabs are expanded or kept only in messages), DEL,
+/// C1, the line/paragraph separators, and the bidi controls.
+fn is_forbidden_raw(c: char, allow_tab: bool) -> bool {
+    match c {
+        '\n' => false,
+        '\t' => !allow_tab,
+        '\u{0}'..='\u{1f}' | '\u{7f}'..='\u{9f}' => true,
+        '\u{2028}' | '\u{2029}' | '\u{61c}' | '\u{200e}' | '\u{200f}' => true,
+        '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => true,
+        _ => false,
+    }
+}
+
+/// Naive display column of byte offset `byte` in `line`: Unicode width per
+/// character, tabs to the next stop of four. Independent of the renderer's code.
+fn display_col_at(line: &str, byte: usize) -> usize {
+    let mut col = 0;
+    for (i, ch) in line.char_indices() {
+        if i >= byte {
+            break;
+        }
+        col = if ch == '\t' {
+            col + 4 - (col % 4)
+        } else {
+            col + unicode_lang::char_width(ch)
+        };
+    }
+    col
+}
+
+proptest! {
+    /// ISSUES M15: whatever the source text, message, label, note, help, and file
+    /// name contain, the plain output carries no raw control character, so no
+    /// escape sequence from the input can reach a terminal.
+    #[test]
+    fn m15_plain_output_never_contains_raw_controls(
+        text in "(?s).{0,60}",
+        name in "(?s).{0,10}",
+        message in "(?s).{0,20}",
+        note in "(?s).{0,20}",
+        a in any::<u32>(),
+        b in any::<u32>(),
+    ) {
+        let mut map = SourceMap::new();
+        map.add(name.as_str(), text.as_str()).unwrap();
+        let margin = text.len() as u32 + 2;
+        let span = Span::new(a % margin, b % margin);
+        let diag = Diagnostic::new(Severity::Error, message.as_str(), Label::new(span, note.as_str()))
+            .with_note(note.as_str())
+            .with_help(message.as_str());
+
+        let out = Renderer::new().render(&diag, &map);
+        // Tabs survive only in messages, where they are harmless; the source text
+        // is the only place a tab is expanded, so allow them.
+        let bad: Vec<char> = out.chars().filter(|&c| is_forbidden_raw(c, true)).collect();
+        prop_assert!(bad.is_empty(), "raw controls {:?} in {:?}", bad, out);
+    }
+
+    /// ISSUES H04: a zero-width label at the end of the last source (where
+    /// source-lang 1.0.1 attributes end of input) renders inside that source's
+    /// frame, never as the "outside the loaded sources" fallback, whatever the
+    /// earlier sources are (empty ones included).
+    #[test]
+    fn h04_end_of_input_label_always_renders_a_frame(
+        texts in prop::collection::vec("(?s)[^^]{0,30}", 1..4),
+        pick in any::<usize>(),
+    ) {
+        let mut map = SourceMap::new();
+        for (i, text) in texts.iter().enumerate() {
+            map.add(alloc_name(i), text.as_str()).unwrap();
+        }
+        // An end-of-input position source-lang 1.0.1 attributes to its file: the
+        // end of the last source. (`pick` is kept so old seeds still replay.)
+        let _ = pick;
+        let (_, last) = map.iter().last().unwrap();
+        let at = last.span().end().to_u32();
+        let last_name = alloc_name(texts.len() - 1);
+        let diag = Diagnostic::new(
+            Severity::Error,
+            "found end of input",
+            Label::new(Span::empty(at), "here"),
+        );
+        let out = Renderer::new().render(&diag, &map);
+        prop_assert!(out.contains(&format!("--> {last_name}:")), "{}", out);
+        prop_assert!(!out.contains("outside the loaded sources"), "{}", out);
+        prop_assert_eq!(out.matches('^').count(), 1);
+    }
+
+    /// ISSUES M18: on one line of arbitrary printable text, the caret run starts at
+    /// the naive display column of the span and is as wide as its display width
+    /// (at least one).
+    #[test]
+    fn m18_caret_lead_and_width_follow_display_width(
+        prefix in "[a-z\t世界😀é\u{301}]{0,8}",
+        mid in "[a-z\t世界😀é\u{301}]{1,8}",
+        suffix in "[a-z世]{0,8}",
+    ) {
+        let line = alloc_format(&prefix, &mid, &suffix);
+        let mut map = SourceMap::new();
+        map.add("f", line.as_str()).unwrap();
+
+        let start = prefix.len();
+        let end = prefix.len() + mid.len();
+        let diag = Diagnostic::new(
+            Severity::Error,
+            "msg",
+            Label::new(Span::new(start as u32, end as u32), "lbl"),
+        );
+        let out = Renderer::new().render(&diag, &map);
+
+        let caret_row = out.lines().find(|l| l.contains('^')).unwrap();
+        let after_bar = &caret_row[caret_row.find("| ").unwrap() + 2..];
+        let lead = after_bar.chars().take_while(|&c| c == ' ').count();
+        let width = after_bar.chars().filter(|&c| c == '^').count();
+        let expect_lead = display_col_at(&line, start);
+        let expect_width = display_col_at(&line, end).saturating_sub(expect_lead).max(1);
+        prop_assert_eq!(lead, expect_lead);
+        prop_assert_eq!(width, expect_width);
+    }
+}
+
+/// Parses a single-frame render: the `--> name:line:col` header, the number of
+/// the source row the caret sits under, and the caret's 0-based display column.
+fn header_and_caret(out: &str) -> (u32, u32, u32, usize) {
+    let lines: Vec<&str> = out.lines().collect();
+    let header = lines
+        .iter()
+        .find(|l| l.trim_start().starts_with("-->"))
+        .unwrap();
+    let mut parts = header.rsplitn(3, ':');
+    let col: u32 = parts.next().unwrap().parse().unwrap();
+    let line: u32 = parts.next().unwrap().parse().unwrap();
+    let caret_at = lines.iter().position(|l| l.contains('^')).unwrap();
+    // The row above the caret row is the source row: `N | text`.
+    let row_line: u32 = lines[caret_at - 1]
+        .split(" | ")
+        .next()
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let caret_row = lines[caret_at];
+    let after_bar = &caret_row[caret_row.find("| ").unwrap() + 2..];
+    let lead = after_bar.chars().take_while(|&c| c == ' ').count();
+    (line, col, row_line, lead)
+}
+
+proptest! {
+    /// Coordinator condition on the end-of-input caret: the frame header's
+    /// `line:col` is exactly where the caret is drawn, whether or not the text
+    /// ends with a line break (`\n` or `\r\n`), for ASCII text where a column is
+    /// one character. The caret sits on the header's line, at the header's column.
+    #[test]
+    fn h04_end_of_input_header_matches_the_caret(
+        text in "(a|b| |\n|\r\n){0,30}",
+    ) {
+        let mut map = SourceMap::new();
+        map.add("f", text.as_str()).unwrap();
+        let diag = Diagnostic::new(
+            Severity::Error,
+            "found end of input",
+            Label::unlabelled(Span::empty(text.len() as u32)),
+        );
+        let out = Renderer::new().render(&diag, &map);
+        let (line, col, row_line, lead) = header_and_caret(&out);
+        prop_assert_eq!(row_line, line, "{}", out);
+        prop_assert_eq!(lead as u32 + 1, col, "{}", out);
+    }
+}

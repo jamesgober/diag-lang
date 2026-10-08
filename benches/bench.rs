@@ -44,5 +44,40 @@ fn bench_render(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_construct, bench_render);
+/// A label covering a whole 50,000-line file: the worst case for multi-line
+/// rendering (ISSUES M16/M17). The cost must be bounded by what is printed, not by
+/// the number of lines the span covers.
+fn bench_render_whole_file(c: &mut Criterion) {
+    let mut text = String::new();
+    for line in 0..50_000 {
+        text.push_str(&format!(
+            "    let value_{line:05} = compute({line});
+"
+        ));
+    }
+    let len = text.len() as u32;
+    let mut map = SourceMap::new();
+    map.add("big.rs", text).expect("benchmark input fits");
+
+    let diag = Diagnostic::new(
+        diag_lang::Severity::Error,
+        "this whole file is wrong",
+        Label::new(Span::new(0, len), "everything here"),
+    );
+    let renderer = Renderer::new();
+
+    let mut group = c.benchmark_group("render_whole_file");
+    group.sample_size(10);
+    group.bench_function("50k_lines", |b| {
+        b.iter(|| renderer.render(black_box(&diag), black_box(&map)));
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_construct,
+    bench_render,
+    bench_render_whole_file
+);
 criterion_main!(benches);

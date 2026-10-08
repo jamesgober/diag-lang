@@ -3,7 +3,7 @@
 # =============================================================================
 [package]
 name    = "diag-lang"
-version = "1.0.0"
+version = "1.0.1"
 
 # Minimum Supported Rust Version (MSRV)
 rust-version = "1.85"
@@ -56,7 +56,9 @@ color = []
 # Byte positions and spans: the coordinate substrate a label points with.
 span-lang = { version = "0.4", default-features = false }
 # Source storage and the global position space a span is resolved against.
-source-lang = { version = "1", default-features = false }
+source-lang = { version = "1.0.1", default-features = false }
+# Display width (UAX #11) for caret alignment under CJK, emoji, and combining marks.
+unicode-lang = { version = "1", default-features = false }
 
 
 # DEV DEPENDENCIES

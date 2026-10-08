@@ -72,7 +72,7 @@ error: cannot find value `foo` in this scope
 
 ## Status
 
-This is <code>v1.0.0</code>: the public API is stable and frozen under SemVer. The diagnostic model and renderer are complete — multi-line spans, secondary labels, notes/help, and optional ANSI colour (the `color` feature) with plain output staying complete and correctly aligned. The full surface is catalogued in <a href="./docs/API.md"><code>docs/API.md</code></a>.
+This is <code>v1.0.1</code>, a patch on the stable <code>1.0</code> line: the public API is frozen under SemVer. The diagnostic model and renderer are complete — multi-line spans (long ones elided), secondary labels, notes/help, and optional ANSI colour (the `color` feature) with plain output staying complete and correctly aligned in display columns. 1.0.1 renders end-of-input errors in their source frame, escapes control characters from untrusted text, and aligns carets under wide and combining characters; see the <a href="./CHANGELOG.md"><code>CHANGELOG</code></a>. The full surface is catalogued in <a href="./docs/API.md"><code>docs/API.md</code></a>.
 
 <hr>
 <br>
