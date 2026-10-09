@@ -3,12 +3,15 @@
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use core::fmt;
 
-use crate::{Label, Severity};
+use crate::{Code, Label, Severity, Suggestion};
 
 /// One thing a compiler stage has to say about the source: a [`Severity`], a
 /// headline message, a primary [`Label`] pointing at the span it concerns, and
 /// optionally secondary labels for related locations and trailing note/help lines.
+/// Since 1.1.0 it can also carry a [`Code`] naming its kind and fix-it
+/// [`Suggestion`]s.
 ///
 /// A `Diagnostic` is the unit a lexer, parser, or type checker emits and a
 /// [`Renderer`](crate::Renderer) turns into caret-annotated output. Constructing
@@ -36,14 +39,23 @@ use crate::{Label, Severity};
 /// assert_eq!(diag.notes().count(), 1);
 /// assert_eq!(diag.help().count(), 1);
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct Diagnostic {
     severity: Severity,
+    code: Option<Code>,
     message: Box<str>,
     primary: Label,
     secondary: Vec<Label>,
     notes: Vec<Box<str>>,
     help: Vec<Box<str>>,
+    /// Allocated on the first suggestion. Most diagnostics have none, and one
+    /// pointer instead of an inline `Vec` keeps the type within 16 bytes of its
+    /// 1.0 size, so building and moving a diagnostic on the front end's hot
+    /// path costs what it did. `None` whenever there are no suggestions.
+    // The box is the point: an 8-byte thin pointer instead of a 24-byte inline
+    // `Vec`. A boxed slice would reallocate on every push.
+    #[allow(clippy::box_collection)]
+    suggestions: Option<Box<Vec<Suggestion>>>,
 }
 
 impl Diagnostic {
@@ -76,11 +88,13 @@ impl Diagnostic {
     pub fn new(severity: Severity, message: impl Into<Box<str>>, primary: Label) -> Self {
         Self {
             severity,
+            code: None,
             message: message.into(),
             primary,
             secondary: Vec::new(),
             notes: Vec::new(),
             help: Vec::new(),
+            suggestions: None,
         }
     }
 
@@ -154,6 +168,103 @@ impl Diagnostic {
     pub fn with_help(mut self, help: impl Into<Box<str>>) -> Self {
         self.help.push(help.into());
         self
+    }
+
+    /// Sets the diagnostic's [`Code`], returning the diagnostic for chaining.
+    ///
+    /// The code is the stable, machine-readable name of this kind of diagnostic
+    /// (see [`Code`] for the format and the recommended ranges). The renderer
+    /// shows it in the header, `error[E0001]: …`, and the JSON output carries
+    /// it. Setting a code again replaces the previous one.
+    ///
+    /// *Since 1.1.0.*
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use diag_lang::{Code, Diagnostic, Label, Severity, Span};
+    ///
+    /// const UNKNOWN_NAME: Code = Code::new("E", 2001).unwrap();
+    ///
+    /// let diag = Diagnostic::new(Severity::Error, "unknown name", Label::unlabelled(Span::empty(0)))
+    ///     .with_code(UNKNOWN_NAME);
+    /// assert_eq!(diag.code(), Some(UNKNOWN_NAME));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn with_code(mut self, code: Code) -> Self {
+        self.code = Some(code);
+        self
+    }
+
+    /// Adds a fix-it [`Suggestion`], returning the diagnostic for chaining.
+    ///
+    /// Suggestions render after the notes and help lines, each as a `help:`
+    /// block showing the source as it would read with the fix applied; they
+    /// appear in the JSON output with every edit; and
+    /// [`apply_fixes`](crate::apply_fixes) applies the machine-applicable ones.
+    /// Any number may be added; they keep the order they were added in.
+    ///
+    /// *Since 1.1.0.*
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use diag_lang::{Applicability, Diagnostic, Edit, Label, Severity, Span, Suggestion};
+    ///
+    /// let diag = Diagnostic::new(Severity::Error, "expected `;`", Label::unlabelled(Span::empty(9)))
+    ///     .with_suggestion(
+    ///         Suggestion::new("add `;`", Applicability::MachineApplicable)
+    ///             .with_edit(Edit::insert(9, ";")),
+    ///     );
+    /// assert_eq!(diag.suggestions().len(), 1);
+    /// ```
+    #[must_use]
+    pub fn with_suggestion(mut self, suggestion: Suggestion) -> Self {
+        self.suggestions
+            .get_or_insert_with(Box::default)
+            .push(suggestion);
+        self
+    }
+
+    /// Returns the diagnostic's code, if one was set with
+    /// [`with_code`](Diagnostic::with_code).
+    ///
+    /// *Since 1.1.0.*
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use diag_lang::{Code, Diagnostic, Label, Severity, Span};
+    ///
+    /// let diag = Diagnostic::new(Severity::Error, "boom", Label::unlabelled(Span::empty(0)));
+    /// assert_eq!(diag.code(), None);
+    /// let diag = diag.with_code(Code::new("E", 1).unwrap());
+    /// assert_eq!(diag.code().map(|c| c.number()), Some(1));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn code(&self) -> Option<Code> {
+        self.code
+    }
+
+    /// Returns the fix-it suggestions, in the order they were added.
+    ///
+    /// *Since 1.1.0.*
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use diag_lang::{Applicability, Diagnostic, Label, Severity, Span, Suggestion};
+    ///
+    /// let diag = Diagnostic::new(Severity::Warning, "w", Label::unlabelled(Span::empty(0)))
+    ///     .with_suggestion(Suggestion::new("try this", Applicability::MaybeIncorrect));
+    /// assert_eq!(diag.suggestions()[0].message(), "try this");
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn suggestions(&self) -> &[Suggestion] {
+        self.suggestions.as_deref().map_or(&[], Vec::as_slice)
     }
 
     /// Returns the level this diagnostic reports at.
@@ -263,6 +374,42 @@ impl Diagnostic {
     }
 }
 
+impl PartialEq for Diagnostic {
+    /// Two diagnostics are equal when every part is: severity, code, message,
+    /// primary label, and the secondary labels, notes, help lines, and
+    /// suggestions in order. Compared through the accessors, so an empty
+    /// suggestion list equals an absent one however it is stored.
+    fn eq(&self, other: &Self) -> bool {
+        self.severity == other.severity
+            && self.code == other.code
+            && self.message == other.message
+            && self.primary == other.primary
+            && self.secondary() == other.secondary()
+            && self.notes().eq(other.notes())
+            && self.help().eq(other.help())
+            && self.suggestions() == other.suggestions()
+    }
+}
+
+impl Eq for Diagnostic {}
+
+impl fmt::Debug for Diagnostic {
+    /// Lists every part by name, in the 1.0 field order with the 1.1 parts
+    /// (`code`, `suggestions`) after them.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Diagnostic")
+            .field("severity", &self.severity)
+            .field("message", &self.message)
+            .field("primary", &self.primary)
+            .field("secondary", &self.secondary())
+            .field("notes", &self.notes)
+            .field("help", &self.help)
+            .field("code", &self.code)
+            .field("suggestions", &self.suggestions())
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use span_lang::Span;
@@ -282,6 +429,43 @@ mod tests {
         assert!(diag.secondary().is_empty());
         assert_eq!(diag.notes().count(), 0);
         assert_eq!(diag.help().count(), 0);
+        assert_eq!(diag.code(), None);
+        assert!(diag.suggestions().is_empty());
+    }
+
+    #[test]
+    fn test_plain_diagnostic_stays_small() {
+        // The 1.0 layout plus an inline code and one pointer for suggestions:
+        // at most 16 bytes larger than 1.0's 120 on 64-bit targets.
+        assert!(core::mem::size_of::<Diagnostic>() <= 136);
+    }
+
+    #[test]
+    fn test_equality_and_debug_ignore_storage() {
+        let plain = Diagnostic::new(Severity::Error, "m", Label::unlabelled(Span::empty(0)));
+        let rich = plain.clone().with_note("n");
+        assert_eq!(plain, plain.clone());
+        assert_ne!(plain, rich);
+        assert_eq!(rich, rich.clone());
+        let debug = alloc::format!("{plain:?}");
+        assert!(debug.starts_with("Diagnostic { severity: Error, message: \"m\""));
+        assert!(debug.contains("secondary: [], notes: [], help: [], code: None, suggestions: []"));
+    }
+
+    #[test]
+    fn test_code_is_replaced_and_suggestions_accumulate() {
+        use crate::Applicability;
+
+        let e1 = Code::new("E", 1).unwrap();
+        let e2 = Code::new("E", 2).unwrap();
+        let diag = Diagnostic::new(Severity::Error, "m", Label::unlabelled(Span::empty(0)))
+            .with_code(e1)
+            .with_code(e2)
+            .with_suggestion(Suggestion::new("a", Applicability::MachineApplicable))
+            .with_suggestion(Suggestion::new("b", Applicability::Unspecified));
+        assert_eq!(diag.code(), Some(e2));
+        let order: Vec<_> = diag.suggestions().iter().map(Suggestion::message).collect();
+        assert_eq!(order, ["a", "b"]);
     }
 
     #[test]

@@ -20,15 +20,46 @@
     <p>
         diag-lang collects compiler diagnostics and renders them the way a modern toolchain does: a severity, a message, and the offending source with a caret underlining exactly where the problem is. It turns a span and a source into the kind of error output developers actually want to read, and it is reused unchanged across every language built on the -lang family.
     </p>
+    <p>
+        Since 1.1 a diagnostic can also carry a stable error code (<code>error[E0425]</code>) and fix-it suggestions, shown rustc-style with the fixed source and applied to a file in one call. The same diagnostics come out as versioned, deterministic JSON for language servers, MCP tools, and AI clients, and a collector counts, de-duplicates, sorts, and caps a compilation's worth of them.
+    </p>
     <br>
     <hr>
     <p>
-        <strong>MSRV is 1.85+</strong> (Rust 2024 edition).
+        <strong>MSRV is 1.85+</strong> (Rust 2024 edition). <code>no_std</code>-compatible (needs only <code>alloc</code>), <code>#![forbid(unsafe_code)]</code>, three dependencies, all from the family: <a href="https://crates.io/crates/span-lang"><code>span-lang</code></a>, <a href="https://crates.io/crates/source-lang"><code>source-lang</code></a>, and <a href="https://crates.io/crates/unicode-lang"><code>unicode-lang</code></a>.
     </p>
     <blockquote>
-        <strong>Status: stable.</strong> The public API is frozen as of <code>1.0.0</code> and follows Semantic Versioning &mdash; no breaking changes before <code>2.0</code>. See <a href="./CHANGELOG.md"><code>CHANGELOG.md</code></a>.
+        <strong>Status: stable.</strong> The public API is frozen as of <code>1.0.0</code> and follows Semantic Versioning &mdash; no breaking changes before <code>2.0</code>. <code>1.1.0</code> only adds. See <a href="./docs/API.md#stability"><code>docs/API.md</code></a> for the frozen surface and the behavioural contract, and <a href="./CHANGELOG.md"><code>CHANGELOG.md</code></a>.
     </blockquote>
 </div>
+
+<hr>
+<br>
+
+## The model
+
+A handful of types, one per job:
+
+- A **[`Diagnostic`](./docs/API.md#diagnostic)** is one thing a compiler stage has to say: a [`Severity`](./docs/API.md#severity), a message, a primary [`Label`](./docs/API.md#label) (a span and its explanation), and optionally secondary labels, notes, help, a [`Code`](./docs/API.md#code), and [`Suggestion`s](./docs/API.md#suggestion-edit-applicability) made of [`Edit`s](./docs/API.md#suggestion-edit-applicability).
+- A **[`Renderer`](./docs/API.md#renderer)** turns a diagnostic and a `SourceMap` into caret-annotated text for a person.
+- **[JSON output](./docs/API.md#json-output)** turns the same diagnostic into one line of versioned JSON for a tool.
+- **[`apply_fixes`](./docs/API.md#apply_edits-apply_fixes-applyerror)** applies the machine-applicable suggestions to a source, atomically, or says why it cannot.
+- A **[`Diagnostics`](./docs/API.md#diagnostics)** collector gathers a compilation: error and warning counts, duplicates dropped, sorted by position, capped.
+
+<br>
+
+What it guarantees, and how each guarantee is checked:
+
+| Guarantee | How it is held |
+|---|---|
+| Carets and fix markers line up under the right characters: multi-byte UTF-8, tabs, CJK, emoji, combining marks. | Byte-exact snapshot tests, and property tests checking caret position and width against a naive column walk. |
+| Rendering is total and deterministic: any diagnostic, any spans, any edits, any source — no panic, same bytes every time. | Property tests over arbitrary sources, spans, and suggestions (valid or not), including the ones that cannot be placed. |
+| Untrusted text cannot drive the terminal. Control characters in sources, messages, file names, and replacement text are escaped. | A property test that plain output never contains a raw control character, plus snapshots of hostile input. |
+| A suggestion block shows exactly the fix `apply_edits` would make. | A property test comparing every rendered line of the block with the text the applier produces. |
+| Applying edits is exact or refused: never half-applied, never a panic. | Property tests against a reference applier and a naive pairwise conflict check, plus a 100,000-edit scale test. |
+| JSON output always parses, has exactly the schema's keys, and decodes to exactly the diagnostic it came from, whatever its text. | Round-trip property tests through a strict RFC 8259 parser written in the tests (rejects duplicate keys, raw controls, lone surrogates). |
+| The collector counts, de-duplicates, caps, and sorts exactly as documented. | A property test against a naive model, and a 100,000-diagnostic scale test. |
+| End-of-input errors keep their source frame. | Property and snapshot tests over every input-ending shape. |
 
 <hr>
 <br>
@@ -37,12 +68,22 @@
 
 ```toml
 [dependencies]
-diag-lang = "1"
+diag-lang = "1.1"
 ```
 
+Without the standard library:
+
+```toml
+[dependencies]
+diag-lang = { version = "1.1", default-features = false }
+```
+
+<hr>
 <br>
 
-## Example
+## Quick start
+
+Build a diagnostic, render it:
 
 ```rust
 use diag_lang::{Diagnostic, Label, Renderer, Severity, SourceMap, Span};
@@ -68,11 +109,84 @@ error: cannot find value `foo` in this scope
   |
 ```
 
-<br>
+### Codes and fix-its
 
-## Status
+```rust
+use diag_lang::{Applicability, Code, Diagnostic, Edit, Label, Renderer, Severity};
+use diag_lang::{SourceMap, Span, Suggestion, apply_fixes};
 
-This is <code>v1.0.1</code>, a patch on the stable <code>1.0</code> line: the public API is frozen under SemVer. The diagnostic model and renderer are complete — multi-line spans (long ones elided), secondary labels, notes/help, and optional ANSI colour (the `color` feature) with plain output staying complete and correctly aligned in display columns. 1.0.1 renders end-of-input errors in their source frame, escapes control characters from untrusted text, and aligns carets under wide and combining characters; see the <a href="./CHANGELOG.md"><code>CHANGELOG</code></a>. The full surface is catalogued in <a href="./docs/API.md"><code>docs/API.md</code></a>.
+const MISSING_SEMICOLON: Code = Code::new("E", 1001).unwrap();
+
+let text = "let total = count + 1\n";
+let mut map = SourceMap::new();
+map.add("calc.ls", text).unwrap();
+
+let diag = Diagnostic::new(
+    Severity::Error,
+    "expected `;`",
+    Label::new(Span::empty(21), "statement ends here"),
+)
+.with_code(MISSING_SEMICOLON)
+.with_suggestion(
+    Suggestion::new("add `;`", Applicability::MachineApplicable).with_edit(Edit::insert(21, ";")),
+);
+
+assert_eq!(Renderer::new().render(&diag, &map), "\
+error[E1001]: expected `;`
+ --> calc.ls:1:22
+  |
+1 | let total = count + 1
+  |                      ^ statement ends here
+  |
+help: add `;`
+  |
+1 | let total = count + 1;
+  |                      +
+  |
+");
+
+// `--fix`: apply every machine-applicable suggestion to the source.
+assert_eq!(apply_fixes(text, 0, [&diag]).unwrap(), "let total = count + 1;\n");
+```
+
+### JSON for tools
+
+```rust
+use diag_lang::{Diagnostic, Label, Severity, SourceMap, Span};
+
+let mut map = SourceMap::new();
+map.add("a.txt", "let x = y;").unwrap();
+let diag = Diagnostic::new(Severity::Error, "unknown `y`", Label::new(Span::new(8, 9), "here"));
+
+let json = diag.to_json(&map); // one line, deterministic, schema version 1
+assert!(json.starts_with(r#"{"version":1,"severity":"error","code":null,"message":"unknown `y`""#));
+assert!(json.contains(r#""location":{"file":"a.txt","start":{"offset":8,"line":1,"column":9}"#));
+```
+
+### A whole compilation
+
+```rust
+use diag_lang::{Diagnostic, Diagnostics, Label, Renderer, Severity, SourceMap, Span};
+
+let mut map = SourceMap::new();
+map.add("a.txt", "abc").unwrap();
+
+let mut diags = Diagnostics::with_limit(100); // bounded, whatever the input
+for at in [2, 0, 0] {
+    diags.push(Diagnostic::new(Severity::Error, "bad", Label::unlabelled(Span::new(at, at + 1))));
+}
+assert_eq!(diags.error_count(), 2); // the repeat was dropped
+diags.sort();
+
+let for_people = Renderer::new().render_all(&diags, &map);
+let for_tools = diags.to_json(&map);
+assert!(for_people.starts_with("error: bad\n --> a.txt:1:1\n"));
+assert!(for_tools.starts_with(r#"{"version":1,"errors":2,"warnings":0,"omitted":0,"#));
+```
+
+A runnable end-to-end version is in [`examples/fixes.rs`](./examples/fixes.rs) (`cargo run --example fixes`).
+
+The code conventions the family uses (prefixes per registry; lexical `0001`–`0999`, parse `1000`–`1999`, semantic `2000`–`7999`) are in the [code registries guide](./docs/API.md#guide-code-registries-and-ranges).
 
 <hr>
 <br>

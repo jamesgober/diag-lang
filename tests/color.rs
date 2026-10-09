@@ -107,3 +107,61 @@ fn test_exact_coloured_frame_for_a_single_label() {
         "\u{1b}[1;31merror\u{1b}[0m: oops\n \u{1b}[1;34m-->\u{1b}[0m m.rs:1:5\n  \u{1b}[1;34m|\u{1b}[0m\n\u{1b}[1;34m1\u{1b}[0m \u{1b}[1;34m|\u{1b}[0m let x = 1;\n  \u{1b}[1;34m|\u{1b}[0m     \u{1b}[1;31m^ here\u{1b}[0m\n  \u{1b}[1;34m|\u{1b}[0m\n"
     );
 }
+
+/// A diagnostic with a code and suggestions in both block styles, one in
+/// another file, plus a capped collector.
+fn with_fixes() -> (SourceMap, Diagnostic) {
+    use diag_lang::{Applicability, Code, Edit, Suggestion};
+
+    let mut map = SourceMap::new();
+    map.add("a.rs", "let x = 1;;\nlet y = cout;\n").unwrap();
+    map.add("b.rs", "fn f() {}\n").unwrap();
+    let diag = Diagnostic::new(
+        Severity::Warning,
+        "several problems",
+        Label::new(Span::new(20, 24), "unknown"),
+    )
+    .with_code(Code::new("W", 42).unwrap())
+    .with_suggestion(
+        Suggestion::new("rename", Applicability::MaybeIncorrect)
+            .with_edit(Edit::new(Span::new(20, 24), "count")),
+    )
+    .with_suggestion(
+        Suggestion::new("remove `;`", Applicability::MachineApplicable)
+            .with_edit(Edit::delete(Span::new(10, 11))),
+    )
+    .with_suggestion(
+        Suggestion::new("make it public", Applicability::MachineApplicable)
+            .with_edit(Edit::insert(26, "pub ")),
+    );
+    (map, diag)
+}
+
+#[test]
+fn test_stripped_colour_equals_plain_output_with_codes_and_suggestions() {
+    let (map, diag) = with_fixes();
+    let plain = Renderer::new().render(&diag, &map);
+    let coloured = Renderer::new().with_color().render(&diag, &map);
+    assert_ne!(plain, coloured);
+    assert_eq!(strip_ansi(&coloured), plain);
+    // The code is coloured with the severity word.
+    assert!(coloured.starts_with("\u{1b}[1;33mwarning[W0042]\u{1b}[0m: several problems\n"));
+}
+
+#[test]
+fn test_stripped_colour_equals_plain_output_for_render_all() {
+    use diag_lang::Diagnostics;
+
+    let (map, diag) = with_fixes();
+    let mut diags = Diagnostics::with_limit(1);
+    diags.push(diag);
+    diags.push(Diagnostic::new(
+        Severity::Error,
+        "dropped",
+        Label::unlabelled(Span::empty(0)),
+    ));
+    let plain = Renderer::new().render_all(&diags, &map);
+    let coloured = Renderer::new().with_color().render_all(&diags, &map);
+    assert!(plain.ends_with("\nnote: 1 more diagnostic not shown\n"));
+    assert_eq!(strip_ansi(&coloured), plain);
+}

@@ -21,6 +21,94 @@
 
 ---
 
+## [1.1.0] - 2026-10-08
+
+An additive minor release: error codes, fix-it suggestions, JSON output, and a
+diagnostics collector (ISSUES M19, and the diag-lang side of P04 and P19). Code
+that builds against 1.0 builds unchanged, and a diagnostic without a code or
+suggestions renders byte for byte as in 1.0.1.
+
+### Added
+
+- **Error codes.** `Code` (one to four uppercase letters plus exactly four
+  digits: `E0001`, `T0042`, `KRA0013`) with `const fn new` and `parse`,
+  `prefix`, `number`, `Display`, and ordering by prefix then number.
+  `Diagnostic::with_code` / `code`. The renderer shows the code in the header,
+  rustc-style: `error[E0425]: ...`. `docs/API.md` documents the family's code
+  registries and a recommended split by phase: lexical `0001`-`0999`, parse
+  `1000`-`1999`, semantic `2000`-`7999`, lints `8000`-`8999`, internal
+  `9000`-`9999` (P19: lexical errors are a range check, not a message prefix).
+- **Fix-it suggestions.** `Suggestion { message, edits, applicability }`,
+  `Edit { span, replacement }` (`new`, `insert`, `delete`), and
+  `Applicability` (`MachineApplicable`, `MaybeIncorrect`, `HasPlaceholders`,
+  `Unspecified`; `#[non_exhaustive]`). `Diagnostic::with_suggestion` /
+  `suggestions`. The renderer shows each suggestion as a `help:` block with the
+  fixed lines: `+` under insertions and `~` under replacements, or a `-`/`+`
+  diff when an edit only deletes; a block in another source is headed
+  `--> file:line:col`; long blocks are elided like long spans; a suggestion
+  that cannot be placed shows its message alone.
+- **Applying edits.** `apply_edits(text, base, edits)` and
+  `apply_fixes(text, base, diagnostics)` (every machine-applicable suggestion
+  that targets the text) return the edited text or an `ApplyError`
+  (`OutOfBounds`, `NotCharBoundary`, `Overlap`; `#[non_exhaustive]`). Edits are
+  validated against the text's bounds and character boundaries, sorted, and
+  conflict-checked; identical edits are applied once; nothing is applied on
+  error. `O(n log n + len)`.
+- **JSON output.** `Diagnostic::to_json` / `write_json` (one line per
+  diagnostic, for JSON Lines) and `Diagnostics::to_json` / `write_json` (one
+  document with counts), plus `JSON_SCHEMA_VERSION` (`1`). Dependency-free,
+  compact, deterministic key order, RFC 8259 escaping (and U+2028/U+2029).
+  Labels and edits carry the global byte span and a resolved location: file,
+  and byte offset, line, and column for each end. The schema is documented in
+  `docs/API.md` and only gains keys within a version.
+- **Collector.** `Diagnostics`: `new`, `with_limit`, `push` (identical
+  diagnostics are kept once, via a SipHash-2-4 fingerprint and an ordered
+  index, `O(log n)`), `sort` (stable, by primary span then severity),
+  `clear`, `has_errors`, `error_count`, `warning_count`, `count`, `omitted`,
+  `limit`, `len`, `is_empty`, `as_slice`, `iter`, `into_vec`, and the
+  `Extend`/`FromIterator`/`IntoIterator` impls. Past the limit, diagnostics are
+  counted but not stored. `Renderer::render_all` / `render_all_to` render a
+  collector with blank lines between diagnostics and a final
+  `note: N more diagnostics not shown` line when the cap dropped some.
+- `examples/fixes.rs`: a check, rendering, JSON, and `--fix` end to end.
+- Tests: snapshot tests for codes and every suggestion layout
+  (`tests/suggestions.rs`); a strict JSON parser and round-trip properties
+  (`tests/json.rs`); apply properties against a reference applier and a naive
+  conflict check (`tests/apply.rs`); collector properties against a naive model
+  and code-format properties (`tests/collect.rs`); a property that a suggestion
+  block shows exactly what `apply_edits` produces. The README and
+  `docs/API.md` examples now run as doctests.
+- Benchmarks: `construct_with_code_and_fix`, `render_with_code_and_fix`,
+  `to_json`, `collect/push_100k_twice`, `collect/sort_100k`,
+  `apply_edits/100k_edits`.
+
+### Changed
+
+- `Diagnostic`'s `Debug` output lists `code` and `suggestions` after the 1.0
+  fields; equality also compares them. (Neither the `Debug` text nor the field
+  layout is part of the contract.)
+- Suggestions are stored behind one lazily allocated pointer and the code
+  inline, so a diagnostic is 16 bytes larger than in 1.0; construction and
+  rendering are unchanged within measurement noise (interleaved A/B against
+  1.0.1, see the release notes).
+- The crate root now also denies `unused_results`, `clippy::unwrap_used`,
+  `expect_used`, `panic`, `todo`, `unimplemented`, `unreachable`, `dbg_macro`,
+  and `print_stdout`/`print_stderr` in library code (not `warnings`, so new
+  toolchain lints never break a downstream build).
+
+### Notes
+
+- `Severity` stays exhaustive. Adding `#[non_exhaustive]` (ISSUES F13) would
+  break downstream exhaustive matches (lsp-lang has one), so it is recorded for
+  2.0 in `dev/ROADMAP.md`, not done in 1.x.
+- No new dependencies.
+- Known limitation (source-lang 1.x layout): in a multi-source map the end of
+  one source is the start of the next, so `apply_fixes` selects an edit at
+  exactly that position for both sources. Documented and pinned by a test;
+  fixed by source-lang 2.0.
+
+---
+
 ## [1.0.1] - 2026-10-08
 
 A patch release: no public API changes. It fixes end-of-input rendering (ISSUES
@@ -177,7 +265,8 @@ Initial scaffold and repository bootstrap. No domain logic yet &mdash; this rele
 - `.github/workflows/ci.yml` CI matrix; `deny.toml`, `clippy.toml`, `rustfmt.toml`.
 - `dev/DIRECTIVES.md` and `dev/ROADMAP.md` (committed engineering standards + plan).
 
-[Unreleased]: https://github.com/jamesgober/diag-lang/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/jamesgober/diag-lang/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/jamesgober/diag-lang/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/jamesgober/diag-lang/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/jamesgober/diag-lang/compare/v0.4.0...v1.0.0
 [0.4.0]: https://github.com/jamesgober/diag-lang/compare/v0.3.0...v0.4.0

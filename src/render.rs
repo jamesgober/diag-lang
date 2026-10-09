@@ -7,7 +7,9 @@ use core::fmt;
 use source_lang::{SourceFile, SourceId, SourceMap};
 use span_lang::{BytePos, LineCol, LineIndex, Span};
 
-use crate::{Diagnostic, Label};
+use crate::{Diagnostic, Diagnostics, Label, Severity};
+
+mod suggest;
 
 /// The number of columns a tab advances to. A tab moves the cursor to the next
 /// multiple of this width, the convention source viewers use, so the caret line
@@ -50,8 +52,7 @@ impl Palette {
 
     /// The palette for a coloured frame at `severity`.
     #[cfg(feature = "color")]
-    fn coloured(severity: crate::Severity) -> Palette {
-        use crate::Severity;
+    fn coloured(severity: Severity) -> Palette {
         // Bold colours: the error level drives the header and primary underline.
         let sev = match severity {
             Severity::Error => "\x1b[1;31m",   // red
@@ -216,7 +217,7 @@ impl Renderer {
     /// The palette to render with: coloured for `severity` when styling is on,
     /// plain otherwise.
     #[cfg(feature = "color")]
-    fn palette(&self, severity: crate::Severity) -> Palette {
+    fn palette(&self, severity: Severity) -> Palette {
         if self.color {
             Palette::coloured(severity)
         } else {
@@ -227,7 +228,7 @@ impl Renderer {
     /// The palette to render with. Without the `color` feature there is only the
     /// plain one.
     #[cfg(not(feature = "color"))]
-    fn palette(&self, _severity: crate::Severity) -> Palette {
+    fn palette(&self, _severity: Severity) -> Palette {
         Palette::PLAIN
     }
 
@@ -310,14 +311,25 @@ impl Renderer {
     ) -> fmt::Result {
         let palette = self.palette(diag.severity());
 
-        writeln!(
-            out,
-            "{h}{}{r}: {}",
-            diag.severity().as_str(),
-            Clean::text(diag.message()),
-            h = palette.header,
-            r = palette.reset
-        )?;
+        // `error[E0001]: …` with a code, `error: …` without, rustc-style.
+        match diag.code() {
+            Some(code) => writeln!(
+                out,
+                "{h}{}[{code}]{r}: {}",
+                diag.severity().as_str(),
+                Clean::text(diag.message()),
+                h = palette.header,
+                r = palette.reset
+            )?,
+            None => writeln!(
+                out,
+                "{h}{}{r}: {}",
+                diag.severity().as_str(),
+                Clean::text(diag.message()),
+                h = palette.header,
+                r = palette.reset
+            )?,
+        }
 
         // Split every label into the source it resolves against, keeping any that
         // resolve nowhere for a trailing note.
@@ -374,7 +386,109 @@ impl Renderer {
                 r = palette.reset
             )?;
         }
+        for suggestion in diag.suggestions() {
+            suggest::write_suggestion(out, map, suggestion, primary_file, &palette)?;
+        }
 
+        Ok(())
+    }
+
+    /// Renders every stored diagnostic of `diags` against `map`, in their
+    /// current order, and returns the result as an owned `String`.
+    ///
+    /// The convenience form of [`render_all_to`](Renderer::render_all_to); see
+    /// there for the layout.
+    ///
+    /// *Since 1.1.0.*
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use diag_lang::{Diagnostic, Diagnostics, Label, Renderer, Severity, SourceMap, Span};
+    ///
+    /// let mut map = SourceMap::new();
+    /// map.add("a.txt", "abc").expect("fits");
+    ///
+    /// let mut diags = Diagnostics::with_limit(1);
+    /// diags.push(Diagnostic::new(Severity::Error, "first", Label::unlabelled(Span::new(0, 1))));
+    /// diags.push(Diagnostic::new(Severity::Error, "second", Label::unlabelled(Span::new(1, 2))));
+    ///
+    /// assert_eq!(Renderer::new().render_all(&diags, &map), "\
+    /// error: first
+    ///  --> a.txt:1:1
+    ///   |
+    /// 1 | abc
+    ///   | ^
+    ///   |
+    ///
+    /// note: 1 more diagnostic not shown
+    /// ");
+    /// ```
+    #[must_use]
+    pub fn render_all(&self, diags: &Diagnostics, map: &SourceMap) -> String {
+        let mut out = String::new();
+        // Writing into a `String` is infallible; see `render`.
+        let _ = self.render_all_to(&mut out, diags, map);
+        out
+    }
+
+    /// Renders every stored diagnostic of `diags` against `map`, in their
+    /// current order, writing into any [`fmt::Write`] sink.
+    ///
+    /// Each diagnostic renders exactly as [`render_to`](Renderer::render_to)
+    /// renders it, with a blank line between consecutive diagnostics. If the
+    /// collector's cap omitted any, a final `note: N more diagnostics not shown`
+    /// line follows, after a blank line. An empty collector with nothing
+    /// omitted writes nothing. Sort first with
+    /// [`Diagnostics::sort`](crate::Diagnostics::sort) for source order.
+    ///
+    /// *Since 1.1.0.*
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`fmt::Error`] the sink reports. Writing into a
+    /// `String` never fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use diag_lang::{Diagnostic, Diagnostics, Label, Renderer, Severity, SourceMap, Span};
+    ///
+    /// let map = SourceMap::new();
+    /// let mut diags = Diagnostics::with_limit(0);
+    /// diags.push(Diagnostic::new(Severity::Error, "e", Label::unlabelled(Span::empty(0))));
+    /// diags.push(Diagnostic::new(Severity::Error, "f", Label::unlabelled(Span::empty(0))));
+    ///
+    /// let mut out = String::new();
+    /// Renderer::new().render_all_to(&mut out, &diags, &map).expect("string write");
+    /// assert_eq!(out, "note: 2 more diagnostics not shown\n");
+    /// ```
+    pub fn render_all_to(
+        &self,
+        out: &mut impl fmt::Write,
+        diags: &Diagnostics,
+        map: &SourceMap,
+    ) -> fmt::Result {
+        for (i, diag) in diags.iter().enumerate() {
+            if i > 0 {
+                out.write_char('\n')?;
+            }
+            self.render_to(out, diag, map)?;
+        }
+        let omitted = diags.omitted();
+        if omitted > 0 {
+            if !diags.is_empty() {
+                out.write_char('\n')?;
+            }
+            let palette = self.palette(Severity::Note);
+            writeln!(
+                out,
+                "{n}note:{r} {omitted} more diagnostic{s} not shown",
+                n = palette.header,
+                r = palette.reset,
+                s = if omitted == 1 { "" } else { "s" },
+            )?;
+        }
         Ok(())
     }
 }
@@ -403,7 +517,7 @@ struct Located<'a> {
 /// source, so a zero-width end-of-input span there lands in that source. At an
 /// interior boundary the position is the next source's first byte and lands
 /// there (source-lang's documented 1.x limitation, fixed by its 2.0 layout).
-fn resolve(map: &SourceMap, span: Span) -> Option<(SourceId, usize, usize)> {
+pub(crate) fn resolve(map: &SourceMap, span: Span) -> Option<(SourceId, usize, usize)> {
     let (id, local) = map.locate(span.start())?;
     let file = map.source(id)?;
     let base = file.span().start().to_u32();
@@ -678,7 +792,7 @@ fn push_marks<'a>(
 /// the fallback rebuilds an index and is unreachable while that holds, but keeps
 /// the result right regardless (an end offset of a non-last source would map to
 /// the next source).
-fn line_col_at(map: &SourceMap, file: &SourceFile, at: usize) -> LineCol {
+pub(crate) fn line_col_at(map: &SourceMap, file: &SourceFile, at: usize) -> LineCol {
     let text = file.text();
     let at = floor_boundary(text, at);
     let global = file.span().start().to_u32().saturating_add(at as u32);
@@ -740,7 +854,7 @@ const fn decimal_width(mut n: u32) -> usize {
 /// Floors `idx` down to the nearest character boundary of `s`, clamping into
 /// range first. A span offset that lands inside a multi-byte character is moved to
 /// the start of that character, so slicing at the result never splits a `char`.
-fn floor_boundary(s: &str, idx: usize) -> usize {
+pub(crate) fn floor_boundary(s: &str, idx: usize) -> usize {
     let mut at = idx.min(s.len());
     while at > 0 && !s.is_char_boundary(at) {
         at -= 1;

@@ -321,3 +321,126 @@ proptest! {
         prop_assert_eq!(lead as u32 + 1, col, "{}", out);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Suggestions (since 1.1.0)
+// ---------------------------------------------------------------------------
+
+use diag_lang::{Applicability, Code, Edit, Suggestion, apply_edits};
+
+/// The rows of every `help:` block in `out`: `(line number, sign, content)`
+/// for each `N | text`, `N - text`, or `N + text` row after a `help:` line.
+fn help_rows(out: &str) -> Vec<(usize, char, String)> {
+    let mut rows = Vec::new();
+    let mut in_help = false;
+    for row in out.lines() {
+        if row.starts_with("help: ") {
+            in_help = true;
+            continue;
+        }
+        if !in_help {
+            continue;
+        }
+        let trimmed = row.trim_start();
+        let digits = trimmed.bytes().take_while(u8::is_ascii_digit).count();
+        if digits == 0 {
+            continue;
+        }
+        let rest = &trimmed[digits..];
+        let sign = rest.chars().nth(1).unwrap();
+        // `N | ` / `N - ` / `N + `: the content starts after the sign and a space.
+        let content = rest.get(3..).unwrap_or("");
+        rows.push((
+            trimmed[..digits].parse().unwrap(),
+            sign,
+            content.to_string(),
+        ));
+    }
+    rows
+}
+
+prop_compose! {
+    /// A valid suggestion: non-overlapping edits at character boundaries of
+    /// `text`, each replacing a range (possibly empty) with short text
+    /// (possibly empty, possibly a line break).
+    fn valid_edits(len: usize)(
+        cuts in proptest::collection::vec(0..=len, 0..6),
+        texts in proptest::collection::vec(prop_oneof![
+            Just(String::new()),
+            "[xyz]{1,3}",
+            Just("\n".to_string()),
+            Just("q\nr".to_string()),
+        ], 6),
+    ) -> Vec<Edit> {
+        let mut points = cuts;
+        points.sort_unstable();
+        points.dedup();
+        points
+            .chunks(2)
+            .zip(texts)
+            .map(|(c, t)| Edit::new(Span::new(c[0] as u32, *c.last().unwrap() as u32), t))
+            .collect()
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1024))]
+
+    /// Any suggestion, valid or not, renders without panicking, ends with a
+    /// newline, is deterministic, and leaks no raw control character.
+    #[test]
+    fn rendering_any_suggestion_is_total(
+        text in "(?s).{0,40}",
+        message in "(?s).{0,12}",
+        code in proptest::option::of(0u16..=9999),
+        edits in proptest::collection::vec((0u32..50, 0u32..50, "(?s).{0,6}"), 0..5),
+    ) {
+        let mut map = SourceMap::new();
+        map.add("f", text.as_str()).unwrap();
+        let mut suggestion = Suggestion::new(message, Applicability::MachineApplicable);
+        for (a, b, r) in edits {
+            suggestion = suggestion.with_edit(Edit::new(Span::new(a, b), r));
+        }
+        let mut diag = Diagnostic::new(Severity::Error, "m", Label::unlabelled(Span::new(0, 1)))
+            .with_suggestion(suggestion);
+        if let Some(n) = code {
+            diag = diag.with_code(Code::new("E", n).unwrap());
+        }
+        let out = Renderer::new().render(&diag, &map);
+        prop_assert!(out.ends_with('\n'));
+        prop_assert_eq!(&out, &Renderer::new().render(&diag, &map));
+        prop_assert!(!out.chars().any(|c| is_forbidden_raw(c, true) && c != '\n'));
+    }
+
+    /// The block shows the fixed source: every `N |` and `N +` row is line N of
+    /// the text `apply_edits` produces, and every `N -` row is line N of the
+    /// original. The renderer and the applier cannot disagree about a fix.
+    #[test]
+    fn suggestion_block_shows_exactly_the_applied_fix(
+        (text, edits) in "[abc \n]{0,40}".prop_flat_map(|t| {
+            let len = t.len();
+            (Just(t), valid_edits(len))
+        }),
+    ) {
+        let mut map = SourceMap::new();
+        map.add("f", text.as_str()).unwrap();
+        let mut suggestion = Suggestion::new("fix", Applicability::MachineApplicable);
+        for e in &edits {
+            suggestion = suggestion.with_edit(e.clone());
+        }
+        let diag = Diagnostic::new(Severity::Error, "m", Label::unlabelled(Span::empty(0)))
+            .with_suggestion(suggestion);
+        let out = Renderer::new().render(&diag, &map);
+
+        let fixed = apply_edits(&text, 0, &edits).unwrap();
+        let fixed_lines: Vec<&str> = fixed.split('\n').collect();
+        let old_lines: Vec<&str> = text.split('\n').collect();
+        let rows = help_rows(&out);
+        let changed = fixed != text;
+        prop_assert!(!changed || !rows.is_empty(), "{}", out);
+        for (n, sign, content) in rows {
+            let source = if sign == '-' { &old_lines } else { &fixed_lines };
+            prop_assert_eq!(source.get(n - 1).copied(), Some(content.as_str()), "{}", out);
+        }
+    }
+}

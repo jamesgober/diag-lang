@@ -48,3 +48,7 @@ diag-lang collects compiler diagnostics and renders them with source context. A 
 - A multi-line span renders coherently (every covered line shown or summarised per the documented rule), never a broken or misaligned frame.
 - A span that exceeds its source's bounds, or references an unknown source, renders a defined fallback message rather than panicking.
 - Colour is additive: with styling disabled, the plain output is still complete and correctly aligned.
+- A suggestion block shows exactly the text `apply_edits` produces for that suggestion; an unplaceable suggestion degrades to its message, never a wrong fix (since 1.1.0).
+- Applying edits is atomic: the result is the reference application of the edits, or an error with nothing applied (since 1.1.0).
+- JSON output always parses under a strict RFC 8259 parser, has exactly the schema's keys in order, and decodes to exactly the diagnostic it came from (since 1.1.0).
+- The collector stores and counts each distinct diagnostic once, counts what the cap omits, and sorts stably by position (since 1.1.0).
