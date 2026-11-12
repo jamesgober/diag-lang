@@ -524,7 +524,7 @@ error: width
     );
 }
 
-/// Coordinator condition on the end-of-input caret: in every shape of input the
+/// Required condition on the end-of-input caret: in every shape of input the
 /// frame header's `line:col` equals the caret's line and column, so the header
 /// never disagrees with the caret in the same frame.
 #[test]
