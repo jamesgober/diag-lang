@@ -300,7 +300,7 @@ fn header_and_caret(out: &str) -> (u32, u32, u32, usize) {
 }
 
 proptest! {
-    /// Coordinator condition on the end-of-input caret: the frame header's
+    /// Required condition on the end-of-input caret: the frame header's
     /// `line:col` is exactly where the caret is drawn, whether or not the text
     /// ends with a line break (`\n` or `\r\n`), for ASCII text where a column is
     /// one character. The caret sits on the header's line, at the header's column.

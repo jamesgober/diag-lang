@@ -39,7 +39,7 @@ const MAX_NUMBER: u16 = 9999;
 /// | `E` | Runtime errors: LSB | `E0100`–`E0199` |
 /// | `T` | Type checking (typeck-lang) | `T0001`– |
 ///
-/// A language front end takes its own prefix (Kraken uses `KRA`) and is
+/// A language front end takes its own prefix (for example `KRA`) and is
 /// recommended to split its numbers by phase, so that "is this a lexical
 /// error?" is a range check:
 ///

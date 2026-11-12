@@ -726,7 +726,7 @@ registry names the phase. Codes in use across the `-lang` family:
 | `E` | Runtime errors, LSB (`specs/LSB.md`) | `E0100`–`E0199` |
 | `T` | Type checking (typeck-lang) | `T0001`– |
 
-A language front end takes its own prefix — Kraken uses `KRA` — and declares its
+A language front end takes its own prefix (for example `KRA`) and declares its
 codes as constants in one module, its registry:
 
 ```rust
