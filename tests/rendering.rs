@@ -491,6 +491,41 @@ fn test_m15_control_characters_are_escaped_everywhere() {
     }
 }
 
+/// Invisible characters (zero-width space and joiners, word joiner, Hangul
+/// filler, tag characters) are escaped in source lines and messages, so a name
+/// that hides one never prints the same as the name it imitates, and the caret
+/// still lines up under the escaped text.
+#[test]
+fn test_invisible_characters_are_escaped() {
+    let src = "let admin\u{200d} = 1;\n\u{200b}x\u{2060}y \u{3164} z\u{e0041}\n";
+    let mut map = SourceMap::new();
+    map.add("spoof.rs", src).unwrap();
+
+    let diag = Diagnostic::new(
+        Severity::Error,
+        "unused variable `admin\u{200d}`",
+        Label::new(span_of(src, "admin", 0), "here"),
+    )
+    .with_secondary(Label::new(span_of(src, "z", 0), "after"));
+
+    let out = Renderer::new().render(&diag, &map);
+    assert_eq!(
+        out,
+        r"error: unused variable `admin\u{200d}`
+ --> spoof.rs:1:5
+  |
+1 | let admin\u{200d} = 1;
+  |     ^^^^^ here
+2 | \u{200b}x\u{2060}y \u{3164} z\u{e0041}
+  |                             - after
+  |
+"
+    );
+    for bad in ['\u{200d}', '\u{200b}', '\u{2060}', '\u{3164}', '\u{e0041}'] {
+        assert!(!out.contains(bad), "raw {bad:?} in output");
+    }
+}
+
 /// ISSUES M18: carets align in display columns, so wide CJK characters take two
 /// columns, combining marks none, and emoji two.
 #[test]

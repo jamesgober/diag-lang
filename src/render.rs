@@ -118,8 +118,10 @@ impl Palette {
 /// Source text, messages, labels, notes, help, and file names are written with
 /// every control character escaped visibly as `\u{..}`: C0 and C1 controls
 /// (including `ESC`, so no ANSI/OSC sequence can reach the terminal), `DEL`, a
-/// carriage return, the Unicode line and paragraph separators, and the bidi
-/// override and isolate controls. Tabs are kept (expanded to spaces in source
+/// carriage return, the Unicode line and paragraph separators, the bidi
+/// override and isolate controls, and invisible (default-ignorable) characters
+/// such as ZERO WIDTH JOINER, so a name that hides one does not print the same
+/// as the name it imitates. Tabs are kept (expanded to spaces in source
 /// lines), and newlines are kept in messages, notes, and help, where they are
 /// layout. The only escape sequences in the output are the renderer's own colours.
 ///
@@ -869,9 +871,12 @@ pub(crate) fn floor_boundary(s: &str, idx: usize) -> usize {
 /// and a carriage return that would overwrite the line), `DEL`, the C1 controls
 /// (which include the 8-bit `CSI`/`OSC`), the Unicode line and paragraph
 /// separators, and the bidi embedding, override, isolate, and mark controls that
-/// reorder how a line displays. A tab is never escaped; a newline is escaped
-/// only where it is not layout (`keep_newline` false).
-const fn needs_escape(ch: char, keep_newline: bool) -> bool {
+/// reorder how a line displays. It also covers every default-ignorable code
+/// point (zero-width space and joiners, word joiner, byte order mark, Hangul
+/// fillers, variation selectors, tag characters), which render as nothing and
+/// would let two different names print the same. A tab is never escaped; a
+/// newline is escaped only where it is not layout (`keep_newline` false).
+fn needs_escape(ch: char, keep_newline: bool) -> bool {
     match ch {
         '\t' => false,
         '\n' => !keep_newline,
@@ -879,7 +884,7 @@ const fn needs_escape(ch: char, keep_newline: bool) -> bool {
         '\u{2028}' | '\u{2029}' => true,
         '\u{61c}' | '\u{200e}' | '\u{200f}' => true,
         '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => true,
-        _ => false,
+        _ => unicode_lang::is_default_ignorable(ch),
     }
 }
 

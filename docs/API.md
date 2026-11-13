@@ -1,7 +1,7 @@
 # diag-lang &mdash; API Reference
 
 > Complete reference for every public item in `diag-lang`, with examples.
-> **Status: stable since `1.0.0`; this is `1.1.0`.** The surface below follows
+> **Status: stable since `1.0.0`; this is `1.1.1`.** The surface below follows
 > Semantic Versioning — no breaking changes before `2.0`. Items added in 1.1.0
 > are marked *since 1.1.0*. The contract is the [Stability](#stability) section.
 
@@ -539,8 +539,11 @@ source-lang 2.0's reserved end positions).
 label messages, notes, help, suggestion messages and replacement text, and file
 names — is written with its control characters escaped visibly as `\u{..}`: C0
 and C1 controls (so `ESC`, and with it any ANSI/OSC sequence), `DEL`, a carriage
-return, U+2028/U+2029, and the bidi embedding/override/isolate/mark controls.
-Tabs are kept (expanded in source lines); newlines are kept in the message,
+return, U+2028/U+2029, the bidi embedding/override/isolate/mark controls, and
+(since 1.1.1) every default-ignorable code point: the zero-width space and
+joiners, the word joiner, the byte order mark, the Hangul fillers, variation
+selectors and tag characters. Those render as nothing, so without the escape
+`admin\u{200d}` would print exactly like `admin`. Tabs are kept (expanded in source lines); newlines are kept in the message,
 labels, notes, and help, and escaped in file names. The only escape sequences in
 the output are the renderer's own colours.
 
@@ -841,7 +844,8 @@ These are part of the API, not implementation details:
   notes → help → suggestion blocks, the underline and diff styles with `+`, `~`,
   and `-`, the `render_all` separators and summary line. A diagnostic without a
   code or suggestions renders as in 1.0.
-- **Safety of output.** Control characters in caller-supplied text are escaped;
+- **Safety of output.** Control characters and invisible characters in
+  caller-supplied text are escaped;
   the only escape sequences in rendered text are the renderer's own colours.
   Stripping the colours reproduces the plain output.
 - **Determinism.** The same diagnostic and map render, and serialise, to the same
