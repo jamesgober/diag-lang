@@ -153,7 +153,8 @@ fn alloc_format(a: &str, b: &str, c: &str) -> String {
 
 /// Whether `c` is a character the renderer must never emit raw (ISSUES M15):
 /// any C0 control but newline (tabs are expanded or kept only in messages), DEL,
-/// C1, the line/paragraph separators, and the bidi controls.
+/// C1, the line/paragraph separators, the bidi controls, and every
+/// default-ignorable (invisible) code point.
 fn is_forbidden_raw(c: char, allow_tab: bool) -> bool {
     match c {
         '\n' => false,
@@ -161,7 +162,7 @@ fn is_forbidden_raw(c: char, allow_tab: bool) -> bool {
         '\u{0}'..='\u{1f}' | '\u{7f}'..='\u{9f}' => true,
         '\u{2028}' | '\u{2029}' | '\u{61c}' | '\u{200e}' | '\u{200f}' => true,
         '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => true,
-        _ => false,
+        _ => unicode_lang::is_default_ignorable(c),
     }
 }
 

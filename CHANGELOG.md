@@ -21,6 +21,25 @@
 
 ---
 
+## [1.1.1] - 2026-11-12
+
+### Security
+
+- The renderer now escapes invisible characters as well as control and bidi
+  characters. Every default-ignorable code point (zero-width space, ZERO WIDTH
+  JOINER and NON-JOINER, word joiner, byte order mark, the Hangul fillers,
+  variation selectors, tag characters) is written as a visible `\u{..}`
+  escape in source lines, messages, labels, notes, help, suggestions and file
+  names. Before, a diagnostic about `admin\u{200d}` printed it exactly like
+  `admin`, so a reader could not see why two names differed. Carets still line
+  up under the escaped text.
+
+### Changed
+
+- Requires `unicode-lang` 1.1 for its `is_default_ignorable` table.
+
+---
+
 ## [1.1.0] - 2026-10-08
 
 An additive minor release: error codes, fix-it suggestions, JSON output, and a
@@ -265,7 +284,8 @@ Initial scaffold and repository bootstrap. No domain logic yet &mdash; this rele
 - `.github/workflows/ci.yml` CI matrix; `deny.toml`, `clippy.toml`, `rustfmt.toml`.
 - `dev/DIRECTIVES.md` and `dev/ROADMAP.md` (committed engineering standards + plan).
 
-[Unreleased]: https://github.com/jamesgober/diag-lang/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/jamesgober/diag-lang/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/jamesgober/diag-lang/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/jamesgober/diag-lang/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/jamesgober/diag-lang/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/jamesgober/diag-lang/compare/v0.4.0...v1.0.0

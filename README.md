@@ -54,7 +54,7 @@ What it guarantees, and how each guarantee is checked:
 |---|---|
 | Carets and fix markers line up under the right characters: multi-byte UTF-8, tabs, CJK, emoji, combining marks. | Byte-exact snapshot tests, and property tests checking caret position and width against a naive column walk. |
 | Rendering is total and deterministic: any diagnostic, any spans, any edits, any source — no panic, same bytes every time. | Property tests over arbitrary sources, spans, and suggestions (valid or not), including the ones that cannot be placed. |
-| Untrusted text cannot drive the terminal. Control characters in sources, messages, file names, and replacement text are escaped. | A property test that plain output never contains a raw control character, plus snapshots of hostile input. |
+| Untrusted text cannot drive the terminal or hide in it. Control characters, bidi controls and invisible characters (such as ZERO WIDTH JOINER) in sources, messages, file names, and replacement text are escaped. | A property test that plain output never contains a raw control or invisible character, plus snapshots of hostile input. |
 | A suggestion block shows exactly the fix `apply_edits` would make. | A property test comparing every rendered line of the block with the text the applier produces. |
 | Applying edits is exact or refused: never half-applied, never a panic. | Property tests against a reference applier and a naive pairwise conflict check, plus a 100,000-edit scale test. |
 | JSON output always parses, has exactly the schema's keys, and decodes to exactly the diagnostic it came from, whatever its text. | Round-trip property tests through a strict RFC 8259 parser written in the tests (rejects duplicate keys, raw controls, lone surrogates). |
