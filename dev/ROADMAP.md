@@ -73,8 +73,8 @@ Exit criteria:
 
 ## v1.0.1 — Patch: EOF frames, sanitising, elision, display width (DONE)
 
-No public API change. Fixes from the LexerSketch issue ledger
-(`_lexersketch/ISSUES.md`): H04, M15, M16, M17, M18.
+No public API change. Fixes from the issue ledger:
+ H04, M15, M16, M17, M18.
 
 Delivered:
 - [x] **H04** a zero-width label at a source's end renders in that source's frame
@@ -110,7 +110,7 @@ Moved to 2.0 of source-lang (anti-deferral record):
   the next source's first byte, so diag-lang cannot tell them apart. The fix is
   source-lang's reserved end position per source, which is semver-major (it breaks
   repl-lang's base prediction); it is built and parked as Wave M
-  (`_lexersketch/waves/M-source-lang.md`). diag-lang needs no change for it.
+  (the planning notes). diag-lang needs no change for it.
 
 Not done here, and why:
 - Width is per character, not per grapheme cluster (ZWJ sequences, flags,
@@ -124,7 +124,7 @@ Not done here, and why:
 Additive minor. ISSUES M19, and the diag-lang side of P04 (codes for the forge's
 registry) and P19 (lexical errors get a distinct code range). LSP code actions,
 lint autofix, and AI/MCP clients need machine-readable diagnostics
-(`_lexersketch/ARCHITECTURE.md` §11, §14).
+(the architecture notes §11, §14).
 
 Exit criteria:
 - [x] `Diagnostic::with_code`/`code` with a code type that fits family-wide
